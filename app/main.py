@@ -155,11 +155,6 @@ app = FastAPI(
         {"name": "Developer", "description": "Developer tools and utilities"}
     ]
 )
-
-
-# Add metrics logging middleware
-app.add_middleware(MetricsMiddleware)
-
 # Configure CORS
 allowed_origins = settings.BACKEND_CORS_ORIGINS
 logger.info(f"CORS enabled for origins: {allowed_origins}")
@@ -172,6 +167,14 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["*"],
 )
+
+
+# Add metrics logging middleware
+app.add_middleware(MetricsMiddleware)
+
+
+
+
 
 
 # Add Pydantic validation error handler for debugging 422 errors

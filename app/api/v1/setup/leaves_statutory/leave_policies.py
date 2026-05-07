@@ -16,20 +16,27 @@ from app.schemas.leave_policy import (
 router = APIRouter()
 
 
-@router.get("/", summary="API root for Leave Policies")
+@router.get("/", response_model=List[LeavePolicyResponse], summary="List leave policies (root)")
 def root(
     business_id: int = Path(...),
     db: Session = Depends(get_db),
     current_admin: User = Depends(get_current_admin),
+    skip: int = 0,
+    limit: int = 100,
 ):
-    # Validate business access and return a simple API root object
+    """
+    Return list of leave policies for the business.
+    This enforces business isolation and mirrors `/list` behavior.
+    """
+    # Validate business access
     validate_business_access(business_id, current_admin, db)
-    return {
-        "message": "Leave Policies API",
-        "version": "1.0.0",
-        "docs": "/api/docs",
-        "business_id": business_id,
-    }
+
+    try:
+        query = db.query(LeavePolicy).filter(LeavePolicy.business_id == business_id)
+        policies = query.order_by(LeavePolicy.created_at.desc()).offset(skip).limit(limit).all()
+        return [LeavePolicyResponse.model_validate(policy) for policy in policies]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching policies: {str(e)}")
 
 
 @router.post("/", response_model=LeavePolicyResponse, status_code=201)

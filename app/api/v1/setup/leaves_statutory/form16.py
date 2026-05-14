@@ -6,7 +6,9 @@ from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Query, Path as PathParam
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
+import uuid
 
 from app.core.database import get_db
 from app.core.config import settings
@@ -36,6 +38,11 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 UPLOAD_URL_PATH = f"/{UPLOAD_ROOT.name}/signatures"
 
 MODELS_AVAILABLE = True
+
+# Form16 general uploads directory
+FORM16_DIR = UPLOAD_ROOT / "form16"
+FORM16_DIR.mkdir(parents=True, exist_ok=True)
+FORM16_URL_PATH = f"/{UPLOAD_ROOT.name}/form16"
 
 
 async def save_upload_file(file: UploadFile, allow_empty: bool = False) -> str | None:
@@ -67,6 +74,21 @@ async def save_upload_file(file: UploadFile, allow_empty: bool = False) -> str |
 
     # Return a URL path that can be served by the static files mount
     return f"{UPLOAD_URL_PATH}/{unique_filename}"
+
+
+async def save_form16_file(file: UploadFile) -> str:
+    contents = await file.read()
+    if len(contents) == 0:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="File is empty")
+    if len(contents) > settings.MAX_FILE_SIZE:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="File size exceeds limit")
+
+    ext = file.filename.split('.')[-1] if '.' in file.filename else 'bin'
+    filename = f"form16_{int(datetime.utcnow().timestamp())}_{uuid.uuid4().hex}.{ext}"
+    dest = FORM16_DIR / filename
+    with open(dest, 'wb') as f:
+        f.write(contents)
+    return f"{FORM16_URL_PATH}/{filename}"
 
 
 # Note: text-signature fallback removed. API now expects a binary `file` upload for signatures.
@@ -150,14 +172,14 @@ async def create_person_responsible(
     fullName: str = Form(...),
     designation: str = Form(...),
     fatherName: str = Form(...),
-    file: UploadFile = File(...),
     business_id: int = PathParam(...),
     db: Session = Depends(get_db),
     current_admin = Depends(get_current_admin),
 ):
-    # save file
-    signature_path = await save_upload_file(file)
+    """Create a Person Responsible (no file). Use the separate upload endpoint to attach files.
 
+    Example: POST /api/v1/{business_id}/setup/form16/person with multipart form fields.
+    """
     payload = {
         "fullName": fullName,
         "designation": designation,
@@ -166,18 +188,52 @@ async def create_person_responsible(
     }
 
     repo = Form16Repository(db)
-    person = repo.create_person(payload, signature_path=signature_path)
+    person = repo.create_person(payload)
 
-    return {
-        "id": person.id,
-        "fullName": person.full_name,
-        "designation": person.designation,
-        "fatherName": person.father_name,
-        "signaturePath": person.signature_path,
-        "business_id": person.business_id,
-        "created_at": person.created_at,
-        "updated_at": person.updated_at,
-    }
+    return person_responsible_to_dict(person)
+
+
+@router.post("/person/{person_id}/upload", response_model=PersonResponsibleResponse)
+async def upload_person_file(
+    person_id: int,
+    file: UploadFile = File(...),
+    business_id: int = PathParam(...),
+    db: Session = Depends(get_db),
+    current_admin = Depends(get_current_admin),
+):
+    """Upload/replace the Person Responsible's signature/file. Saved under `uploads/form16` and updates DB."""
+    # basic checks
+    if not file or not file.filename:
+        raise HTTPException(status_code=400, detail="No file provided")
+
+    # Save file
+    saved_url = await save_form16_file(file)
+
+    # load person and validate ownership
+    person = db.query(PersonResponsible).filter(PersonResponsible.id == person_id).first()
+    if not person:
+        # cleanup saved file
+        try:
+            fp = Path(saved_url.lstrip('/'))
+            if fp.exists():
+                fp.unlink()
+        except Exception:
+            pass
+        raise HTTPException(status_code=404, detail="Person not found")
+
+    if business_id is not None and getattr(person, 'business_id', None) != business_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Person does not belong to the given business_id")
+
+    # delete old file if exists
+    if person.signature_path:
+        delete_file(person.signature_path)
+
+    repo = Form16Repository(db)
+    updated = repo.update_person_signature(person_id, saved_url)
+    if not updated:
+        raise HTTPException(status_code=500, detail="Failed to update person record")
+
+    return person_responsible_to_dict(updated)
 
 
 @router.get("/person", response_model=List[PersonResponsibleResponse])

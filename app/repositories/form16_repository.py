@@ -1,6 +1,7 @@
 from typing import Dict
 from sqlalchemy.orm import Session
 from app.models.form16_models import PersonResponsible, EmployerInfo, CitInfo
+from datetime import datetime
 
 
 class Form16Repository:
@@ -17,6 +18,16 @@ class Form16Repository:
             business_id=data.get("business_id"),
         )
         self.db.add(pr)
+        self.db.commit()
+        self.db.refresh(pr)
+        return pr
+
+    def update_person_signature(self, person_id: int, signature_path: str) -> PersonResponsible:
+        pr = self.db.query(PersonResponsible).filter(PersonResponsible.id == person_id).first()
+        if not pr:
+            return None
+        pr.signature_path = signature_path
+        pr.updated_at = datetime.utcnow()
         self.db.commit()
         self.db.refresh(pr)
         return pr

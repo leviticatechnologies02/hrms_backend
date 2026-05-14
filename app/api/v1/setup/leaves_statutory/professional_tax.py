@@ -117,7 +117,6 @@ def add_component_mapping(
 
     try:
         payload = data.model_dump()
-        payload["business_id"] = business_id
         component = service.add_component_mapping(settings_id, payload)
         logger.info(f"Component added to PT settings {settings_id} by {current_user.email}")
         return component
@@ -226,7 +225,6 @@ def add_professional_tax_rate(
 
     try:
         payload = data.model_dump()
-        payload["business_id"] = business_id
         rate = service.add_tax_rate(settings_id, payload)
         logger.info(f"PT rate added to settings {settings_id} for business {business_id} by {current_user.email}")
         return rate

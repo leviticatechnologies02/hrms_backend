@@ -107,6 +107,7 @@ def validate_form_access(db: Session, form_id: int, current_user) -> 'Onboarding
 
 @router.get("/dashboard", response_model=OnboardingDashboardResponse)
 async def get_onboarding_dashboard(
+    business_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -116,24 +117,40 @@ async def get_onboarding_dashboard(
     """
     try:
         user_business_ids = get_user_business_ids(db, current_user)
-        
+
+        # If user has no businesses at all
         if not user_business_ids:
-            # Return empty dashboard if no business
             return {
+                "business_id": business_id,
                 "total_forms": 0,
-                "pending_approval": 0,
-                "approved": 0,
-                "rejected": 0,
-                "recent_forms": []
+                "draft_forms": 0,
+                "sent_forms": 0,
+                "submitted_forms": 0,
+                "approved_forms": 0,
+                "rejected_forms": 0,
+                "expired_forms": 0,
+                "pending_approvals": 0,
+                "recent_submissions": [],
+                "monthly_stats": [],
+                "conversion_rate": 0.0,
+                "average_completion_time": None
             }
-        
-        # Use first business for dashboard
-        business_id = user_business_ids[0]
-        
+
+        # Validate that the requested business_id belongs to the user
+        if business_id not in user_business_ids:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Business with id {business_id} not found or not accessible"
+            )
+
         # Use service layer for real data
         service = OnboardingService(db)
-        dashboard_data = service.get_dashboard_data(business_id)
-        
+        dashboard_data = service.get_dashboard_data(business_id) or {}
+
+        # Ensure response includes business_id
+        if isinstance(dashboard_data, dict):
+            dashboard_data["business_id"] = business_id
+
         return dashboard_data
         
     except Exception as e:

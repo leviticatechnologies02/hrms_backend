@@ -27,7 +27,7 @@ class PTComponentMapping(BaseModel):
     """PT Component Mapping - Which salary components are included"""
     
     __tablename__ = "pt_component_mappings"
-    
+    business_id = Column(Integer, ForeignKey("businesses.id"), nullable=False, index=True)    
     pt_settings_id = Column(Integer, ForeignKey("professional_tax_settings.id"), nullable=False, index=True)
     component_name = Column(String(100), nullable=False)
     component_code = Column(String(50), nullable=False)
@@ -42,7 +42,7 @@ class ProfessionalTaxRate(BaseModel):
     """Professional Tax Rates - State-wise tax slabs"""
     
     __tablename__ = "professional_tax_rates"
-    
+    business_id = Column(Integer, ForeignKey("businesses.id"), nullable=False, index=True)
     pt_settings_id = Column(Integer, ForeignKey("professional_tax_settings.id"), nullable=False, index=True)
     state = Column(String(100), nullable=False, index=True)
     effective_from = Column(Date, nullable=False)

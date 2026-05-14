@@ -372,7 +372,7 @@ api_router.include_router(
 
 api_router.include_router(
     allemployees.router,
-    prefix="/allemployees",
+    prefix="/{business_id}/allemployees",
     tags=["All Employees"]
 )
 
@@ -382,7 +382,7 @@ api_router.include_router(
 
 api_router.include_router(
     onboarding.router,
-    prefix="/onboarding",
+    prefix="/{business_id}/onboarding",
     tags=["Onboarding"]
 )
 
@@ -392,7 +392,7 @@ api_router.include_router(
 
 api_router.include_router(
     separation.router,
-    prefix="/separation",
+    prefix="/{business_id}/separation",
     tags=["Separation"]
 )
 
@@ -402,7 +402,7 @@ api_router.include_router(
 
 api_router.include_router(
     attendance.router,
-    prefix="/attendance",
+    prefix="/{business_id}/attendance",
     tags=["Attendance"]
 )
 
@@ -412,7 +412,7 @@ api_router.include_router(
 
 api_router.include_router(
     datacapture.router,
-    prefix="/datacapture",
+    prefix="/{business_id}/datacapture",
     tags=["Data Capture"]
 )
 
@@ -422,7 +422,7 @@ api_router.include_router(
 
 api_router.include_router(
     bulkupdate.router,
-    prefix="/bulkupdate",
+    prefix="/{business_id}/bulkupdate",
     tags=["Bulk Update"]
 )
 
@@ -432,7 +432,7 @@ api_router.include_router(
 
 api_router.include_router(
     hrmanagement.router,
-    prefix="/hrmanagement",
+    prefix="/{business_id}/hrmanagement",
     tags=["HR Management"]
 )
 
@@ -442,7 +442,7 @@ api_router.include_router(
 
 api_router.include_router(
     requests.router,
-    prefix="/requests",
+    prefix="/{business_id}/requests",
     tags=["Request"]
 )
 
@@ -452,13 +452,13 @@ api_router.include_router(
 
 api_router.include_router(
     support.router,
-    prefix="/support",
+    prefix="/{business_id}/support",
     tags=["Support"]
 )
 
 api_router.include_router(
     help.router,
-    prefix="/help",
+    prefix="/{business_id}/help",
     tags=["Help & Documentation"]
 )
 
@@ -468,7 +468,7 @@ api_router.include_router(
 
 api_router.include_router(
     payroll.router,
-    prefix="/payroll",
+    prefix="/{business_id}/payroll",
     tags=["Payroll"]
 )
 
@@ -478,7 +478,7 @@ api_router.include_router(
 
 api_router.include_router(
     reports.router,
-    prefix="/reports",
+    prefix="/{business_id}/reports",
     tags=["Reports"]
 )
 
@@ -489,7 +489,7 @@ api_router.include_router(
 
 api_router.include_router(
     crm.router,
-    prefix="/crm",
+    prefix="/{business_id}/crm",
     tags=["CRM"]
 )
 

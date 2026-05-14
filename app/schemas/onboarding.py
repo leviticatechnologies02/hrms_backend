@@ -443,6 +443,7 @@ class OnboardingSettingsResponse(OnboardingSettingsUpdate):
 
 # Dashboard and statistics schemas
 class OnboardingDashboardResponse(BaseModel):
+    business_id: int
     total_forms: int
     draft_forms: int
     sent_forms: int

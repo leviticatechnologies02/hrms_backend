@@ -48,7 +48,7 @@ class ESISettingsService:
                 "business_id": business_id,
                 "is_enabled": True,
                 "calculation_base": "Gross Salary",
-                "component_mappings": default_components,
+                "component_mappings": [],
                 "rate_changes": []
             })
         

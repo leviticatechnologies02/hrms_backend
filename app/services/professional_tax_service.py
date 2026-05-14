@@ -27,25 +27,12 @@ class ProfessionalTaxService:
         settings = self.settings_repo.get_by_business_id(business_id)
         
         if not settings:
-            # Create default settings with standard components
-            default_components = [
-                {"component_name": "Basic Salary (Basic)", "component_code": "BASIC", "component_type": "Payable Days", "is_selected": True},
-                {"component_name": "House Rent Allowance (HRA)", "component_code": "HRA", "component_type": "Payable Days", "is_selected": True},
-                {"component_name": "Special Allowance (SA)", "component_code": "SA", "component_type": "Payable Days", "is_selected": True},
-                {"component_name": "Medical Allowance (MDA)", "component_code": "MDA", "component_type": "Payable Days", "is_selected": True},
-                {"component_name": "Leave Encashment (Leave)", "component_code": "LEAVE", "component_type": "Variable", "is_selected": False},
-                {"component_name": "Bonus (Bonus)", "component_code": "BONUS", "component_type": "Variable", "is_selected": False},
-                {"component_name": "Conveyance Allowance (CA)", "component_code": "CA", "component_type": "Payable Days", "is_selected": False},
-                {"component_name": "Telephone Allowance (TA)", "component_code": "TA", "component_type": "Payable Days", "is_selected": False},
-                {"component_name": "Gratuity (Graty)", "component_code": "GRATY", "component_type": "Variable", "is_selected": True},
-                {"component_name": "Loan (Loan)", "component_code": "LOAN", "component_type": "Variable", "is_selected": False},
-            ]
-            
+            # Create empty default settings (no pre-populated components)
             settings = self.settings_repo.create_with_relationships({
                 "business_id": business_id,
                 "is_enabled": True,
                 "calculation_base": "Gross Salary",
-                "component_mappings": default_components,
+                "component_mappings": [],
                 "tax_rates": []
             })
         

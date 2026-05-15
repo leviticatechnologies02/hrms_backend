@@ -153,6 +153,7 @@ class OnboardingPolicy(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     form_id = Column(Integer, ForeignKey("onboarding_forms.id"), nullable=False)
+    business_id = Column(Integer, ForeignKey("businesses.id"), nullable=False, index=True)
     
     # Policy details
     policy_name = Column(String(255), nullable=False)
@@ -170,6 +171,7 @@ class OnboardingPolicy(Base):
 
     # Relationships
     form = relationship("OnboardingForm", back_populates="policy_records")
+    business = relationship("Business")
     creator = relationship("User")
 
 
@@ -180,6 +182,7 @@ class OfferLetter(Base):
     id = Column(Integer, primary_key=True, index=True)
     form_id = Column(Integer, ForeignKey("onboarding_forms.id"), nullable=True)  # Allow standalone offer letters
     template_id = Column(Integer, ForeignKey("offer_letter_templates.id"))
+    business_id = Column(Integer, ForeignKey("businesses.id"), nullable=False, index=True)
     
     # Offer details
     position_title = Column(String(255), nullable=False)
@@ -211,6 +214,7 @@ class OfferLetter(Base):
     # Relationships
     form = relationship("OnboardingForm", back_populates="offer_letters")
     template = relationship("OfferLetterTemplate")
+    business = relationship("Business")
     creator = relationship("User")
 
 

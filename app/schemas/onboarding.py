@@ -113,6 +113,7 @@ class OnboardingPolicyCreate(BaseModel):
 
 class OnboardingPolicyResponse(OnboardingPolicyCreate):
     id: int
+    business_id: int
     form_id: int
     created_at: datetime
     created_by: Optional[int] = None
@@ -137,6 +138,7 @@ class OfferLetterCreate(BaseModel):
 
 class OfferLetterResponse(OfferLetterCreate):
     id: int
+    business_id: int
     form_id: Optional[int] = None  # Allow standalone offer letters
     generated_file_path: Optional[str] = None
     is_generated: bool = False
@@ -398,6 +400,30 @@ class OnboardingSettingsUpdate(BaseModel):
     default_verify_aadhaar: Optional[bool] = Field(None, description="Default Aadhaar verification setting")
     enable_auto_approval: Optional[bool] = Field(None, description="Enable automatic approval")
     auto_approval_criteria: Optional[str] = Field(None, max_length=1000, description="Auto approval criteria (JSON)")
+
+
+# Diagnostic/debug response schema
+class DebugEnvironmentResponse(BaseModel):
+    success: bool = True
+    business_id: int
+    environment: str
+    python_version: str
+    server_status: str
+    app_version: Optional[str] = None
+    timestamp: datetime
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "success": True,
+                "business_id": 1,
+                "environment": "development",
+                "python_version": "3.11.4",
+                "server_status": "running",
+                "app_version": "1.0.0",
+                "timestamp": "2026-05-15T00:00:00Z"
+            }
+        }
     custom_fields: Optional[str] = Field(None, max_length=5000, description="Custom fields definition (JSON)")
     welcome_email_template: Optional[str] = Field(None, max_length=5000, description="Welcome email template")
     reminder_email_template: Optional[str] = Field(None, max_length=5000, description="Reminder email template")
@@ -443,7 +469,6 @@ class OnboardingSettingsResponse(OnboardingSettingsUpdate):
 
 # Dashboard and statistics schemas
 class OnboardingDashboardResponse(BaseModel):
-    business_id: int
     total_forms: int
     draft_forms: int
     sent_forms: int

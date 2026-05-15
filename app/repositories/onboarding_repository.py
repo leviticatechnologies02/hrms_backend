@@ -335,17 +335,19 @@ class OnboardingPolicyRepository(BaseRepository[OnboardingPolicy]):
     def __init__(self, db: Session):
         super().__init__(OnboardingPolicy, db)
     
-    def get_by_form_id(self, form_id: int) -> List[OnboardingPolicy]:
-        """Get policies by form ID"""
-        return self.db.query(OnboardingPolicy).filter(
-            OnboardingPolicy.form_id == form_id
-        ).order_by(OnboardingPolicy.display_order).all()
+    def get_by_form_id(self, form_id: int, business_id: int = None) -> List[OnboardingPolicy]:
+        """Get policies by form ID, optionally scoped to a business"""
+        q = self.db.query(OnboardingPolicy).filter(OnboardingPolicy.form_id == form_id)
+        if business_id is not None:
+            q = q.filter(OnboardingPolicy.business_id == business_id)
+        return q.order_by(OnboardingPolicy.display_order).all()
     
-    def get_mandatory_policies(self, form_id: int) -> List[OnboardingPolicy]:
-        """Get mandatory policies for a form"""
-        return self.db.query(OnboardingPolicy).filter(
-            and_(
-                OnboardingPolicy.form_id == form_id,
-                OnboardingPolicy.is_mandatory == True
-            )
-        ).order_by(OnboardingPolicy.display_order).all()
+    def get_mandatory_policies(self, form_id: int, business_id: int = None) -> List[OnboardingPolicy]:
+        """Get mandatory policies for a form, optionally scoped to a business"""
+        q = self.db.query(OnboardingPolicy).filter(
+            OnboardingPolicy.form_id == form_id,
+            OnboardingPolicy.is_mandatory == True
+        )
+        if business_id is not None:
+            q = q.filter(OnboardingPolicy.business_id == business_id)
+        return q.order_by(OnboardingPolicy.display_order).all()

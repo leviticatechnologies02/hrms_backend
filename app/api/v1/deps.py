@@ -225,8 +225,12 @@ def validate_business_access(business_id: int, current_user: User, db: Session) 
     Raises:
         HTTPException 403: If user doesn't have access to the business
     """
+    # Superadmins have unrestricted access
+    if getattr(current_user, 'role', None) == UserRole.SUPERADMIN:
+        return True
+
     user_business_id = get_user_business_id(current_user, db)
-    
+
     if user_business_id != business_id:
         logger.warning(
             f"Business access denied: User {current_user.email} "

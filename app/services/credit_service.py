@@ -5,6 +5,7 @@ Business logic for credit management
 
 from sqlalchemy.orm import Session
 from sqlalchemy import and_
+from sqlalchemy.exc import IntegrityError
 from app.models.credits import UserCredits, CreditTransaction, CreditPricing
 from app.models.user import User
 from app.schemas.credits import CreditPurchaseRequest, CreditUsageRequest
@@ -21,7 +22,6 @@ class CreditService:
         user_credits = db.query(UserCredits).filter(
             and_(UserCredits.user_id == user_id, UserCredits.business_id == business_id)
         ).first()
-        
         if not user_credits:
             user_credits = UserCredits(
                 user_id=user_id,
@@ -29,8 +29,22 @@ class CreditService:
                 credits=0
             )
             db.add(user_credits)
-            db.commit()
-            db.refresh(user_credits)
+            try:
+                db.commit()
+                db.refresh(user_credits)
+            except IntegrityError:
+                # Could be legacy unique constraint on user_id; rollback and try to fetch existing
+                db.rollback()
+                # Prefer exact match
+                user_credits = db.query(UserCredits).filter(
+                    and_(UserCredits.user_id == user_id, UserCredits.business_id == business_id)
+                ).first()
+                if not user_credits:
+                    # Fallback: return any record for this user (legacy schema), to avoid 500
+                    user_credits = db.query(UserCredits).filter(UserCredits.user_id == user_id).first()
+                # If still not found, re-raise to avoid silent failures
+                if not user_credits:
+                    raise
         
         return user_credits
     

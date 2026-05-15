@@ -46,10 +46,7 @@ from app.services.onboarding_service import OnboardingService
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(
-    prefix="/{business_id}/onboarding",
-    tags=["Onboarding"]
-)
+router = APIRouter()
 
 
 # ---------------------------------------------------------------------------

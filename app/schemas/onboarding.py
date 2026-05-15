@@ -413,7 +413,7 @@ class DebugEnvironmentResponse(BaseModel):
     timestamp: datetime
 
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "success": True,
                 "business_id": 1,

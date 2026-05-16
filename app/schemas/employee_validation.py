@@ -62,7 +62,6 @@ class EmployeeCreateRequest(BaseModel):
     designationId: Optional[int] = Field(None, gt=0, description="Designation ID")
     locationId: Optional[int] = Field(None, gt=0, description="Location ID")
     costCenterId: Optional[int] = Field(None, gt=0, description="Cost center ID")
-    businessId: Optional[int] = Field(None, gt=0, description="Business unit ID")
     gradeId: Optional[int] = Field(None, gt=0, description="Grade ID")
     reportingManagerId: Optional[int] = Field(None, gt=0, description="Reporting manager ID")
     
@@ -191,6 +190,31 @@ class EmployeeWorkProfileUpdateRequest(BaseModel):
     terminationDate: Optional[str] = Field(None, description="Termination date in YYYY-MM-DD format")
     employeeStatus: Optional[EmployeeStatusEnum] = Field(None, description="Employee status")
     
+    @validator('confirmationDate', 'terminationDate')
+    def validate_dates(cls, v):
+        if v:
+            try:
+                datetime.strptime(v, '%Y-%m-%d')
+                return v
+            except ValueError:
+                raise ValueError('Date must be in YYYY-MM-DD format')
+        return v
+
+
+class EmployeeWorkProfileUpdate(BaseModel):
+    """Sanitized work profile update schema for API consumers (DO NOT include businessId)."""
+    departmentId: Optional[int] = Field(None, gt=0, description="Department ID")
+    designationId: Optional[int] = Field(None, gt=0, description="Designation ID")
+    locationId: Optional[int] = Field(None, gt=0, description="Location ID")
+    costCenterId: Optional[int] = Field(None, gt=0, description="Cost center ID")
+    gradeId: Optional[int] = Field(None, gt=0, description="Grade ID")
+    reportingManagerId: Optional[int] = Field(None, gt=0, description="Reporting manager ID")
+    shiftPolicyId: Optional[int] = Field(None, gt=0, description="Shift policy ID")
+    weekoffPolicyId: Optional[int] = Field(None, gt=0, description="Week-off policy ID")
+    confirmationDate: Optional[str] = Field(None, description="Confirmation date in YYYY-MM-DD format")
+    terminationDate: Optional[str] = Field(None, description="Termination date in YYYY-MM-DD format")
+    employeeStatus: Optional[EmployeeStatusEnum] = Field(None, description="Employee status")
+
     @validator('confirmationDate', 'terminationDate')
     def validate_dates(cls, v):
         if v:

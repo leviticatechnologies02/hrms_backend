@@ -3,7 +3,7 @@ All Employees API Endpoints - Production Ready
 Frontend URL: /allemployees/employees
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Body, UploadFile, File, Request
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Body, UploadFile, File, Request, Path
 from sqlalchemy.orm import Session
 from typing import Optional, Dict, Any, List
 from pydantic import BaseModel, validator, Field
@@ -12,10 +12,10 @@ import uuid
 from datetime import datetime
 
 from app.core.database import get_db
-from app.api.v1.deps import get_current_admin
+from app.api.v1.deps import get_current_admin, get_current_user
 from app.models.user import User
 from app.core.config import settings, BASE_URL
-from app.schemas.employee_validation import EmployeeWorkProfileUpdateRequest
+from app.schemas.employee_validation import EmployeeWorkProfileUpdateRequest, EmployeeWorkProfileUpdate
 from app.schemas.asset import (
     AssetCreateRequest, AssetUpdateRequest, AssetCreateResponse, 
     AssetUpdateResponse, AssetDeleteResponse, AssetResponse, 
@@ -47,19 +47,42 @@ from app.schemas.allemployees_additional import (
 )
 from pydantic import ValidationError
 
-router = APIRouter()
+router = APIRouter(prefix="/{business_id}/employees", tags=["All Employees"])
 
 
 # ============================================================================
 # HELPER FUNCTION FOR BUSINESS ISOLATION
 # ============================================================================
-def get_user_business_ids(db: Session, current_user: User) -> List[int]:
+def validate_business_access(business_id: int, current_user: User, db: Session):
     """
-    Get list of business IDs owned by the current user.
-    This ensures data isolation between different businesses.
+    Centralized business access validation.
+    Raises HTTPException 404 if business not found or not accessible by current user.
     """
     from app.models.business import Business
-    
+
+    business = db.query(Business).filter(Business.id == business_id).first()
+    if not business:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Business with ID {business_id} not found"
+        )
+
+    # Ensure the current user has access to this business. Adjust this check as per your access rules.
+    if getattr(business, 'owner_id', None) != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have access to this business"
+        )
+
+    return business
+
+
+def get_user_business_ids(db: Session, current_user: User) -> List[int]:
+    """
+    Compatibility helper: return list of business IDs owned by the current user.
+    This preserves older code paths that still used owner-based filtering.
+    """
+    from app.models.business import Business
     user_business_ids = db.query(Business.id).filter(
         Business.owner_id == current_user.id
     ).all()
@@ -67,9 +90,10 @@ def get_user_business_ids(db: Session, current_user: User) -> List[int]:
 
 
 def validate_employee_access(
-    db: Session, 
-    employee_id: int, 
+    db: Session,
+    employee_id: int,
     current_user: User,
+    business_id: int,
     raise_404: bool = True
 ):
     """
@@ -88,20 +112,11 @@ def validate_employee_access(
         HTTPException 404: If employee not found or not accessible (when raise_404=True)
     """
     from app.models.employee import Employee
-    
-    user_business_ids = get_user_business_ids(db, current_user)
-    
-    if not user_business_ids:
-        if raise_404:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Employee with ID {employee_id} not found"
-            )
-        return None
-    
+
+    # Strict business-scoped lookup
     employee = db.query(Employee).filter(
         Employee.id == employee_id,
-        Employee.business_id.in_(user_business_ids)
+        Employee.business_id == business_id
     ).first()
     
     if not employee and raise_404:
@@ -330,6 +345,7 @@ class EmployeePoliciesUpdate(BaseModel):
 
 @router.get("/filter-options")
 async def get_filter_options(
+    business_id: int = Path(..., description="Business ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -341,29 +357,25 @@ async def get_filter_options(
         from app.models.department import Department
         from app.models.designations import Designation
         
-        # Get user's businesses to filter related data
-        user_business_ids = db.query(Business.id).filter(
-            Business.owner_id == current_user.id
-        ).all()
-        user_business_ids = [b[0] for b in user_business_ids]
-        
-        # Get unique values from database filtered by user's businesses
+        # Validate access to the business and fetch options scoped to business
+        validate_business_access(business_id, current_user, db)
+
         business_units = db.query(Business.business_name).filter(
-            Business.id.in_(user_business_ids)
+            Business.id == business_id
         ).distinct().all()
-        
+
         locations = db.query(Location.name).filter(
-            Location.business_id.in_(user_business_ids)
+            Location.business_id == business_id
         ).distinct().all()
-        
+
         cost_centers = db.query(CostCenter.name).filter(
-            CostCenter.business_id.in_(user_business_ids)
+            CostCenter.business_id == business_id
         ).distinct().all()
-        
+
         departments = db.query(Department.name).filter(
-            Department.business_id.in_(user_business_ids)
+            Department.business_id == business_id
         ).distinct().all()
-        
+
         designations = db.query(Designation.name).distinct().all()
         
         return {
@@ -382,8 +394,9 @@ async def get_filter_options(
         )
 
 
-@router.get("/employees")
+@router.get("/")
 async def get_all_employees(
+    business_id: int = Path(..., description="Business ID"),
     page: int = Query(1, ge=1),
     pageSize: int = Query(10, ge=1, le=1000),
     search: Optional[str] = Query(None),
@@ -410,24 +423,12 @@ async def get_all_employees(
         from app.models.designations import Designation
         from sqlalchemy.orm import joinedload
         
-        # Get user's businesses to filter employees
-        user_business_ids = db.query(Business.id).filter(
-            Business.owner_id == current_user.id
-        ).all()
-        user_business_ids = [b[0] for b in user_business_ids]
-        
-        if not user_business_ids:
-            # User has no businesses, return empty result
-            return {
-                "employees": [],
-                "total": 0,
-                "page": page,
-                "pageSize": pageSize
-            }
-        
-        # Start with base query filtered by user's businesses
+        # Validate access to the business and scope queries
+        validate_business_access(business_id, current_user, db)
+
+        # Start with base query filtered by business_id
         query = db.query(Employee).filter(
-            Employee.business_id.in_(user_business_ids)
+            Employee.business_id == business_id
         ).options(
             joinedload(Employee.profile)
         )
@@ -459,7 +460,7 @@ async def get_all_employees(
                 Employee.designation_id,
                 Employee.business_id
             ).filter(
-                Employee.business_id.in_(user_business_ids)
+                Employee.business_id == business_id
             ).filter(
                 (Employee.first_name.ilike(search_term)) |
                 (Employee.last_name.ilike(search_term)) |
@@ -618,9 +619,10 @@ async def get_all_employees(
         )
 
 
-@router.patch("/employees/{employee_id}/status")
+@router.patch("/{employee_id}/status")
 async def update_employee_status(
-    employee_id: int,
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
     active: bool = Query(..., description="New active status for the employee"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
@@ -629,8 +631,9 @@ async def update_employee_status(
     try:
         from app.models.employee import Employee
         
-        # Validate employee access with business isolation
-        employee = validate_employee_access(db, employee_id, current_user)
+        # Validate business and employee access with business isolation
+        validate_business_access(business_id, current_user, db)
+        employee = validate_employee_access(db, employee_id, current_user, business_id)
         
         new_status = "active" if active else "inactive"
         employee.employee_status = new_status
@@ -661,9 +664,10 @@ async def update_employee_status(
         )
 
 
-@router.get("/employee-summary/{employee_id}", response_model=dict)
+@router.get("/{employee_id}/summary", response_model=dict)
 async def get_employee_summary(
-    employee_id: int,
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -673,15 +677,9 @@ async def get_employee_summary(
         from app.models.designations import Designation
         from sqlalchemy.orm import joinedload
         
-        # Get user's business IDs for filtering
-        user_business_ids = get_user_business_ids(db, current_user)
-        
-        if not user_business_ids:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Employee with ID {employee_id} not found"
-            )
-        
+        # Validate business access and use business-scoped queries
+        validate_business_access(business_id, current_user, db)
+
         # Use optimized query with eager loading and business filter
         employee = db.query(Employee).options(
             joinedload(Employee.designation),
@@ -694,7 +692,7 @@ async def get_employee_summary(
             joinedload(Employee.reporting_manager)
         ).filter(
             Employee.id == employee_id,
-            Employee.business_id.in_(user_business_ids)
+            Employee.business_id == business_id
         ).first()
         
         if not employee:
@@ -751,7 +749,7 @@ async def get_employee_summary(
             try:
                 reporting_manager = db.query(Employee).filter(
                     Employee.id == employee.reporting_manager_id,
-                    Employee.business_id.in_(user_business_ids)
+                    Employee.business_id == business_id
                 ).first()
                 if reporting_manager:
                     # Get manager's profile image
@@ -780,7 +778,7 @@ async def get_employee_summary(
             try:
                 hr_manager = db.query(Employee).filter(
                     Employee.id == employee.hr_manager_id,
-                    Employee.business_id.in_(user_business_ids)
+                    Employee.business_id == business_id
                 ).first()
                 if hr_manager:
                     hr_profile = db.query(EmployeeProfile).filter(EmployeeProfile.employee_id == hr_manager.id).first()
@@ -808,7 +806,7 @@ async def get_employee_summary(
             try:
                 indirect_manager = db.query(Employee).filter(
                     Employee.id == employee.indirect_manager_id,
-                    Employee.business_id.in_(user_business_ids)
+                    Employee.business_id == business_id
                 ).first()
                 if indirect_manager:
                     indirect_profile = db.query(EmployeeProfile).filter(EmployeeProfile.employee_id == indirect_manager.id).first()
@@ -836,7 +834,7 @@ async def get_employee_summary(
         try:
             reports = db.query(Employee).filter(
                 Employee.reporting_manager_id == employee_id,
-                Employee.business_id.in_(user_business_ids)
+                Employee.business_id == business_id
             ).all()
             for report in reports:
                 report_profile = db.query(EmployeeProfile).filter(EmployeeProfile.employee_id == report.id).first()
@@ -992,9 +990,10 @@ async def get_employee_summary(
         )
 
 
-@router.get("/employee-basic/{employee_id}")
+@router.get("/{employee_id}/basic-info")
 async def get_employee_basic_info(
-    employee_id: int,
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -1005,22 +1004,15 @@ async def get_employee_basic_info(
         
         print(f"🔍 Fetching employee basic info for ID: {employee_id}")
         
-        # Get user's business IDs for filtering
-        user_business_ids = get_user_business_ids(db, current_user)
-        
-        if not user_business_ids:
-            print(f"❌ User has no businesses")
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Employee with ID {employee_id} not found"
-            )
-        
+        # Validate business access and use business-scoped queries
+        validate_business_access(business_id, current_user, db)
+
         # Use the same query pattern as employee summary for consistency with business filter
         employee = db.query(Employee).options(
             joinedload(Employee.profile)
         ).filter(
             Employee.id == employee_id,
-            Employee.business_id.in_(user_business_ids)
+            Employee.business_id == business_id
         ).first()
         
         if not employee:
@@ -1213,6 +1205,7 @@ async def get_employee_basic_info(
 
 @router.get("/dropdown-data")
 async def get_dropdown_data(
+    business_id: int = Path(..., description="Business ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -1223,22 +1216,19 @@ async def get_dropdown_data(
         from app.models.department import Department
         from app.models.designations import Designation
         
-        # Get user's businesses to filter related data
-        user_business_ids = db.query(Business.id).filter(
-            Business.owner_id == current_user.id
-        ).all()
-        user_business_ids = [b[0] for b in user_business_ids]
-        
+        # Validate business access and fetch scoped data
+        validate_business_access(business_id, current_user, db)
+
         businesses = db.query(Business).filter(
-            Business.id.in_(user_business_ids)
+            Business.id == business_id
         ).all()
-        
+
         locations = db.query(Location).filter(
-            Location.business_id.in_(user_business_ids)
+            Location.business_id == business_id
         ).all()
-        
+
         departments = db.query(Department).filter(
-            Department.business_id.in_(user_business_ids)
+            Department.business_id == business_id
         ).all()
         designations = db.query(Designation).all()
         
@@ -1259,6 +1249,7 @@ async def get_dropdown_data(
 
 @router.get("/list")
 async def get_employees_list(
+    business_id: int = Path(..., description="Business ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -1268,22 +1259,16 @@ async def get_employees_list(
         from app.models.business import Business
         from sqlalchemy.orm import joinedload
         
-        # Get user's businesses to filter employees
-        user_business_ids = db.query(Business.id).filter(
-            Business.owner_id == current_user.id
-        ).all()
-        user_business_ids = [b[0] for b in user_business_ids]
-        
-        if not user_business_ids:
-            return {"employees": []}
-        
+        # Validate business access and list employees for the business
+        validate_business_access(business_id, current_user, db)
+
         # Get all active employees from database with profile and designation
         from app.models.employee import EmployeeStatus
         employees = db.query(Employee).options(
             joinedload(Employee.designation),
             joinedload(Employee.profile)
         ).filter(
-            Employee.business_id.in_(user_business_ids),
+            Employee.business_id == business_id,
             Employee.employee_status == EmployeeStatus.ACTIVE
         ).limit(50).all()  # Limit for performance
         
@@ -1322,7 +1307,8 @@ async def get_employees_list(
 
 @router.get("/{employee_id}/details")
 async def get_employee_details(
-    employee_id: int,
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -1331,15 +1317,12 @@ async def get_employee_details(
         from app.models.employee import Employee
         from app.models.business import Business
         
-        # Get user's businesses to filter employees
-        user_business_ids = db.query(Business.id).filter(
-            Business.owner_id == current_user.id
-        ).all()
-        user_business_ids = [b[0] for b in user_business_ids]
-        
+        # Validate business and fetch employee scoped to business
+        validate_business_access(business_id, current_user, db)
+
         employee = db.query(Employee).filter(
             Employee.id == employee_id,
-            Employee.business_id.in_(user_business_ids)
+            Employee.business_id == business_id
         ).first()
         
         if not employee:
@@ -1392,6 +1375,7 @@ async def get_employee_details(
 
 @router.get("/search")
 async def search_employees(
+    business_id: int = Path(..., description="Business ID"),
     q: Optional[str] = Query(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
@@ -1401,14 +1385,11 @@ async def search_employees(
         from app.models.employee import Employee
         from app.models.business import Business
         
-        # Get user's businesses to filter employees
-        user_business_ids = db.query(Business.id).filter(
-            Business.owner_id == current_user.id
-        ).all()
-        user_business_ids = [b[0] for b in user_business_ids]
-        
-        # Return empty if no query or no businesses
-        if not q or not q.strip() or not user_business_ids:
+        # Validate business access and use business-scoped search
+        validate_business_access(business_id, current_user, db)
+
+        # Return empty if no query
+        if not q or not q.strip():
             return {"employees": []}
         
         search_term = f"%{q.strip()}%"
@@ -1422,7 +1403,7 @@ async def search_employees(
             Employee.email,
             Employee.employee_status
         ).filter(
-            Employee.business_id.in_(user_business_ids)
+            Employee.business_id == business_id
         ).filter(
             (Employee.first_name.ilike(search_term)) |
             (Employee.last_name.ilike(search_term)) |
@@ -1452,7 +1433,8 @@ async def search_employees(
 
 @router.get("/{employee_id}")
 async def get_employee_by_id(
-    employee_id: int,
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -1461,15 +1443,12 @@ async def get_employee_by_id(
         from app.models.employee import Employee
         from app.models.business import Business
         
-        # Get user's businesses to filter employees
-        user_business_ids = db.query(Business.id).filter(
-            Business.owner_id == current_user.id
-        ).all()
-        user_business_ids = [b[0] for b in user_business_ids]
-        
+        # Validate business and fetch employee scoped to business
+        validate_business_access(business_id, current_user, db)
+
         employee = db.query(Employee).filter(
             Employee.id == employee_id,
-            Employee.business_id.in_(user_business_ids)
+            Employee.business_id == business_id
         ).first()
         
         if not employee:
@@ -1509,6 +1488,7 @@ async def get_employee_by_id(
 @router.post("/")
 async def create_employee(
     employee_data: EmployeeCreate,
+    business_id: int = Path(..., description="Business ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -1574,9 +1554,12 @@ async def create_employee(
                 next_id += 1
                 employee_code = f"EMP{next_id:03d}"
         
+        # Validate business access and create new employee scoped to business
+        validate_business_access(business_id, current_user, db)
+
         # Create new employee
         new_employee = Employee(
-            business_id=getattr(current_user, 'business_id', 1),
+            business_id=business_id,
             first_name=employee_data.firstName,
             last_name=employee_data.lastName,
             middle_name=getattr(employee_data, 'middleName', None),
@@ -1622,8 +1605,9 @@ async def create_employee(
 
 @router.put("/{employee_id}")
 async def update_employee(
-    employee_id: int,
     employee_data: EmployeeUpdate,
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -1639,10 +1623,9 @@ async def update_employee(
                 detail="Request body cannot be empty. At least one field must be provided for update."
             )
         
-        # Check if employee exists
-        # Validate employee access with business isolation
-
-        employee = validate_employee_access(db, employee_id, current_user)
+        # Validate business and employee access with business isolation
+        validate_business_access(business_id, current_user, db)
+        employee = validate_employee_access(db, employee_id, current_user, business_id)
         if not employee:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -1684,7 +1667,8 @@ async def update_employee(
             # Check for duplicate email
             existing_email = db.query(Employee).filter(
                 Employee.email == employee_data.email.strip(),
-                Employee.id != employee_id
+                Employee.id != employee_id,
+                Employee.business_id == business_id
             ).first()
             if existing_email:
                 raise HTTPException(
@@ -1703,7 +1687,8 @@ async def update_employee(
                 # Check for duplicate employee code
                 existing_code = db.query(Employee).filter(
                     Employee.employee_code == employee_data.employeeCode.strip(),
-                    Employee.id != employee_id
+                    Employee.id != employee_id,
+                    Employee.business_id == business_id
                 ).first()
                 if existing_code:
                     raise HTTPException(
@@ -1855,9 +1840,10 @@ async def update_employee(
         )
 
 
-@router.post("/employees/{employee_id}/upload-profile-image")
+@router.post("/{employee_id}/upload-profile-image")
 async def upload_employee_profile_image(
-    employee_id: int,
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
@@ -1880,10 +1866,9 @@ async def upload_employee_profile_image(
                 detail="Invalid file. Please provide a valid image file."
             )
         
-        # Validate employee exists
-        # Validate employee access with business isolation
-
-        employee = validate_employee_access(db, employee_id, current_user)
+        # Validate business and employee access with business isolation
+        validate_business_access(business_id, current_user, db)
+        employee = validate_employee_access(db, employee_id, current_user, business_id)
         if not employee:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -2012,9 +1997,10 @@ async def upload_employee_profile_image(
         )
 
 
-@router.delete("/employees/{employee_id}/profile-image")
+@router.delete("/{employee_id}/profile-image")
 async def remove_employee_profile_image(
-    employee_id: int,
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -2022,10 +2008,9 @@ async def remove_employee_profile_image(
     try:
         from app.models.employee import Employee, EmployeeProfile
         
-        # Validate employee exists
-        # Validate employee access with business isolation
-
-        employee = validate_employee_access(db, employee_id, current_user)
+        # Validate business and employee access with business isolation
+        validate_business_access(business_id, current_user, db)
+        employee = validate_employee_access(db, employee_id, current_user, business_id)
         if not employee:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -2068,11 +2053,12 @@ async def remove_employee_profile_image(
         )
 
 
-@router.patch("/employees/{employee_id}/basic-info")
+@router.patch("/{employee_id}/basic-info")
 async def update_employee_basic_info(
-    employee_id: int,
     basic_info: EmployeeBasicInfoUpdate,
     request: Request,  # ADDED for activity logging
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -2086,11 +2072,10 @@ async def update_employee_basic_info(
         if not basic_info.has_valid_data():
             return {"success": False, "message": "No data provided for update"}
         
-        # Step 2: Get employee
+        # Step 2: Validate business and get employee
         from app.models.employee import Employee, EmployeeProfile
-        # Validate employee access with business isolation
-
-        employee = validate_employee_access(db, employee_id, current_user)
+        validate_business_access(business_id, current_user, db)
+        employee = validate_employee_access(db, employee_id, current_user, business_id)
         if not employee:
             return {"success": False, "message": f"Employee {employee_id} not found"}
         
@@ -2870,6 +2855,7 @@ async def update_employee_basic_info(
 
 @router.get("/stats/overview")
 async def get_employee_stats(
+    business_id: int = Path(..., description="Business ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -2877,27 +2863,18 @@ async def get_employee_stats(
     try:
         from app.models.employee import Employee
         
-        # Get user's business IDs for filtering
-        user_business_ids = get_user_business_ids(db, current_user)
-        
-        if not user_business_ids:
-            return {
-                "total": 0,
-                "active": 0,
-                "inactive": 0,
-                "departments": 0,
-                "locations": 0
-            }
-        
+        # Validate business access and compute stats scoped to business
+        validate_business_access(business_id, current_user, db)
+
         total_employees = db.query(Employee).filter(
-            Employee.business_id.in_(user_business_ids)
+            Employee.business_id == business_id
         ).count()
-        
+
         active_employees = db.query(Employee).filter(
-            Employee.business_id.in_(user_business_ids),
+            Employee.business_id == business_id,
             Employee.employee_status == "active"
         ).count()
-        
+
         inactive_employees = total_employees - active_employees
         
         return {
@@ -2920,9 +2897,10 @@ async def get_employee_stats(
 # ADDITIONAL EMPLOYEE INFORMATION ENDPOINTS
 # ============================================================================
 
-@router.get("/employee-address/{employee_id}")
+@router.get("/{employee_id}/address")
 async def get_employee_address(
-    employee_id: int,
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -2930,10 +2908,9 @@ async def get_employee_address(
     try:
         from app.models.employee import Employee
         
-        # Validate employee access with business isolation
-
-        
-        employee = validate_employee_access(db, employee_id, current_user)
+        # Validate business and employee access with business isolation
+        validate_business_access(business_id, current_user, db)
+        employee = validate_employee_access(db, employee_id, current_user, business_id)
         if not employee:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -2975,9 +2952,10 @@ async def get_employee_address(
         )
 
 
-@router.get("/employee-workprofile/{employee_id}")
+@router.get("/{employee_id:int}/work-profile")
 async def get_employee_work_profile(
-    employee_id: int,
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -2985,10 +2963,9 @@ async def get_employee_work_profile(
     try:
         from app.models.employee import Employee
         
-        # Validate employee access with business isolation
-
-        
-        employee = validate_employee_access(db, employee_id, current_user)
+        # Validate business and employee access with business isolation
+        validate_business_access(business_id, current_user, db)
+        employee = validate_employee_access(db, employee_id, current_user, business_id)
         if not employee:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -3044,14 +3021,19 @@ async def get_employee_work_profile(
         )
 
 
-@router.get("/test-salary-options/{employee_id}")
+@router.get("/{employee_id}/test-salary-options")
 async def test_get_salary_options(
-    employee_id: int,
-    db: Session = Depends(get_db)
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_admin)
 ):
     """Test endpoint to get salary options and breakdown without authentication (for debugging)"""
     try:
         from app.models.employee import EmployeeSalary
+        
+        # Validate business access and get current salary record
+        validate_business_access(business_id, current_user, db)
         
         # Get current salary record
         current_salary = db.query(EmployeeSalary).filter(
@@ -3164,7 +3146,8 @@ async def test_get_salary_options(
 
 @router.get("/{employee_id}/salary-options")
 async def get_employee_salary_options(
-    employee_id: int,
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -3172,10 +3155,9 @@ async def get_employee_salary_options(
     try:
         from app.models.employee import Employee, EmployeeSalary
         
-        # Check if employee exists
-        # Validate employee access with business isolation
-
-        employee = validate_employee_access(db, employee_id, current_user)
+        # Validate business and employee access with business isolation
+        validate_business_access(business_id, current_user, db)
+        employee = validate_employee_access(db, employee_id, current_user, business_id)
         if not employee:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -3239,9 +3221,10 @@ async def get_employee_salary_options(
         )
 
 
-@router.get("/employee-salary/{employee_id}")
+@router.get("/{employee_id}/salary")
 async def get_employee_salary(
-    employee_id: int,
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -3250,10 +3233,9 @@ async def get_employee_salary(
         from app.models.employee import Employee
         from datetime import datetime, date
         
-        # Validate employee access with business isolation
-
-        
-        employee = validate_employee_access(db, employee_id, current_user)
+        # Validate business and employee access with business isolation
+        validate_business_access(business_id, current_user, db)
+        employee = validate_employee_access(db, employee_id, current_user, business_id)
         if not employee:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -3638,32 +3620,35 @@ class EmployeeSalaryUpdate(BaseModel):
 
 @router.put("/{employee_id}/salary")
 async def update_employee_salary(
-    employee_id: int,
-    salary_data: EmployeeSalaryUpdate,
-    request: Request,
+    payload: EmployeeSalaryUpdate,
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
+    request: Request = None,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_admin)
+    current_user: User = Depends(get_current_user)
 ):
-    """Update employee salary information"""
+    """Update employee salary information (tenant-isolated)."""
     try:
         from app.models.employee import Employee, EmployeeSalary
         from datetime import datetime, date
-        
+
         # Validate that the request body has at least one field
-        if not salary_data.has_valid_data():
+        if not payload.has_valid_data():
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="At least one salary field must be provided. Request body cannot be empty."
             )
-        
-        # Check if employee exists
-        # Validate employee access with business isolation
 
-        employee = validate_employee_access(db, employee_id, current_user)
+        # Enforce business access and ensure employee belongs to the business
+        validate_business_access(business_id, current_user, db)
+        employee = db.query(Employee).filter(
+            Employee.id == employee_id,
+            Employee.business_id == business_id
+        ).first()
         if not employee:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Employee with ID {employee_id} not found"
+                detail="Employee not found"
             )
         
         # Get current active salary record
@@ -3673,7 +3658,7 @@ async def update_employee_salary(
         ).first()
         
         # Convert salary data to dict
-        salary_dict = salary_data.dict(exclude_none=True)
+        salary_dict = payload.dict(exclude_none=True)
         
         # Calculate effective date
         effective_from = date.today()
@@ -3903,60 +3888,32 @@ async def update_employee_salary(
         
         return {
             "success": True,
-            "message": "Employee salary updated successfully",
-            "employee": {
-                "id": employee.id,
-                "name": f"{employee.first_name} {employee.last_name}",
-                "code": employee.employee_code or f"EMP{employee.id:03d}"
-            },
-            "salary": {
-                "basicSalary": float(basic_salary),
-                "houseRentAllowance": float(hra),
-                "specialAllowance": float(special),
-                "medicalAllowance": float(medical),
-                "conveyanceAllowance": float(conveyance),
-                "telephoneAllowance": float(telephone),
-                "grossSalary": float(gross_salary),
-                "totalSalary": float(gross_salary),
-                "groupInsurance": float(group_insurance),
-                "gratuity": float(gratuity),
-                "netSalary": float(net_salary),
-                "totalCTC": float(total_ctc),
-                "effectiveFrom": effective_from.isoformat()
-            },
-            "validationInfo": {
-                "fieldsUpdated": len(salary_dict),
-                "validationPassed": True
-            }
+            "message": "Employee salary updated successfully"
         }
     
     except HTTPException:
         raise
     except ValueError as e:
         db.rollback()
-        print(f"VALIDATION ERROR in update_employee_salary: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Validation error: {str(e)}"
-        )
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Validation error: {str(e)}")
     except Exception as e:
         db.rollback()
-        print(f"ERROR in update_employee_salary: {str(e)}")
-        print(f"ERROR type: {type(e).__name__}")
-        print(f"Employee ID: {employee_id}")
-        print(f"Salary data: {salary_data}")
+        # Log the error server-side but don't expose internal error details to clients
+        print(f"ERROR in update_employee_salary: {type(e).__name__}: {e}")
         import traceback
-        print(f"Full traceback: {traceback.format_exc()}")
+        print(traceback.format_exc())
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to update employee salary: {str(e)}"
+            detail="Failed to update employee salary"
         )
 
 
 @router.post("/{employee_id}/salary/revision")
 async def add_salary_revision(
-    employee_id: int,
     revision_data: SalaryRevisionCreate,
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -3989,10 +3946,9 @@ async def add_salary_revision(
         print(f"DEBUG: Adding salary revision for employee {employee_id}")
         print(f"DEBUG: Revision data: {revision_data}")
         
-        # Check if employee exists
-        # Validate employee access with business isolation
-
-        employee = validate_employee_access(db, employee_id, current_user)
+        # Validate business and employee access
+        validate_business_access(business_id, current_user, db)
+        employee = validate_employee_access(db, employee_id, current_user, business_id)
         if not employee:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -4129,7 +4085,8 @@ async def add_salary_revision(
 
 @router.delete("/{employee_id}/salary/revision")
 async def delete_salary_revision(
-    employee_id: int,
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
     revision_data: SalaryRevisionDeleteRequest = Body(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
@@ -4144,10 +4101,8 @@ async def delete_salary_revision(
         from app.models.employee import Employee, EmployeeSalary
         from datetime import datetime
         
-        # Check if employee exists
-        # Validate employee access with business isolation
-
-        employee = validate_employee_access(db, employee_id, current_user)
+        validate_business_access(business_id, current_user, db)
+        employee = validate_employee_access(db, employee_id, current_user, business_id)
         if not employee:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -4231,7 +4186,8 @@ async def delete_salary_revision(
 
 @router.get("/{employee_id}/salary/revision")
 async def get_salary_revision(
-    employee_id: int,
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
     effectiveDate: str = Query(..., description="Effective date in YYYY-MM-DD format"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
@@ -4241,10 +4197,8 @@ async def get_salary_revision(
         from app.models.employee import Employee, EmployeeSalary
         from datetime import datetime
         
-        # Check if employee exists
-        # Validate employee access with business isolation
-
-        employee = validate_employee_access(db, employee_id, current_user)
+        validate_business_access(business_id, current_user, db)
+        employee = validate_employee_access(db, employee_id, current_user, business_id)
         if not employee:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -4329,7 +4283,8 @@ async def get_salary_revision(
 
 @router.get("/employee-identity/{employee_id}")
 async def get_employee_identity(
-    employee_id: int,
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -4340,7 +4295,8 @@ async def get_employee_identity(
         # Validate employee access with business isolation
 
         
-        employee = validate_employee_access(db, employee_id, current_user)
+        validate_business_access(business_id, current_user, db)
+        employee = validate_employee_access(db, employee_id, current_user, business_id)
         if not employee:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -4374,7 +4330,8 @@ async def get_employee_identity(
 
 @router.get("/employee-family/{employee_id}", response_model=EmployeeFamilyResponse)
 async def get_employee_family(
-    employee_id: int,
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -4387,7 +4344,8 @@ async def get_employee_family(
         # Validate employee access with business isolation
 
         
-        employee = validate_employee_access(db, employee_id, current_user)
+        validate_business_access(business_id, current_user, db)
+        employee = validate_employee_access(db, employee_id, current_user, business_id)
         if not employee:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -4449,9 +4407,10 @@ async def get_employee_family(
 
 @router.post("/{employee_id}/family", response_model=FamilyMemberCreateResponse)
 async def create_employee_family_member(
-    employee_id: int,
     member_data: FamilyMemberCreateRequest,
     request: Request,
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -4462,10 +4421,9 @@ async def create_employee_family_member(
         from app.schemas.family import FamilyMemberCreateRequest, FamilyMemberCreateResponse, FamilyMemberResponse
         from datetime import datetime
         
-        # Validate employee exists
-        # Validate employee access with business isolation
-
-        employee = validate_employee_access(db, employee_id, current_user)
+        # Validate employee exists and belongs to the business
+        validate_business_access(business_id, current_user, db)
+        employee = validate_employee_access(db, employee_id, current_user, business_id)
         if not employee:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -4538,10 +4496,11 @@ async def create_employee_family_member(
 
 @router.put("/{employee_id}/family/{member_id}", response_model=FamilyMemberUpdateResponse)
 async def update_employee_family_member(
-    employee_id: int,
-    member_id: int,
     member_data: FamilyMemberUpdateRequest,
     request: Request,
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
+    member_id: int = Path(..., description="Member ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -4552,10 +4511,9 @@ async def update_employee_family_member(
         from app.schemas.family import FamilyMemberUpdateRequest, FamilyMemberUpdateResponse, FamilyMemberResponse
         from datetime import datetime
         
-        # Validate employee exists
-        # Validate employee access with business isolation
-
-        employee = validate_employee_access(db, employee_id, current_user)
+        # Validate employee exists and belongs to the business
+        validate_business_access(business_id, current_user, db)
+        employee = validate_employee_access(db, employee_id, current_user, business_id)
         if not employee:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -4652,9 +4610,10 @@ async def update_employee_family_member(
 
 @router.delete("/{employee_id}/family/{member_id}", response_model=FamilyMemberDeleteResponse)
 async def delete_employee_family_member(
-    employee_id: int,
-    member_id: int,
     request: Request,
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
+    member_id: int = Path(..., description="Member ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -4664,10 +4623,9 @@ async def delete_employee_family_member(
         from app.models.employee_relative import EmployeeRelative
         from app.schemas.family import FamilyMemberDeleteResponse
         
-        # Validate employee exists
-        # Validate employee access with business isolation
-
-        employee = validate_employee_access(db, employee_id, current_user)
+        # Validate employee exists and belongs to the business
+        validate_business_access(business_id, current_user, db)
+        employee = validate_employee_access(db, employee_id, current_user, business_id)
         if not employee:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -4733,7 +4691,8 @@ async def delete_employee_family_member(
 
 @router.get("/employee-additional/{employee_id}", response_model=EmployeeAdditionalInfoResponse)
 async def get_employee_additional_info(
-    employee_id: int,
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -4745,7 +4704,8 @@ async def get_employee_additional_info(
         # Validate employee access with business isolation
 
         
-        employee = validate_employee_access(db, employee_id, current_user)
+        validate_business_access(business_id, current_user, db)
+        employee = validate_employee_access(db, employee_id, current_user, business_id)
         if not employee:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -4805,9 +4765,10 @@ async def get_employee_additional_info(
 
 @router.post("/{employee_id}/additional-info", response_model=AdditionalInfoSaveResponse)
 async def save_employee_additional_info(
-    employee_id: int,
     additional_data: AdditionalInfoUpdateRequest,
     request: Request,
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -4816,10 +4777,9 @@ async def save_employee_additional_info(
         from app.models.employee import Employee
         from app.models.employee_additional_info import EmployeeAdditionalInfo
         
-        # Validate employee exists
-        # Validate employee access with business isolation
-
-        employee = validate_employee_access(db, employee_id, current_user)
+        # Validate employee exists and belongs to the business
+        validate_business_access(business_id, current_user, db)
+        employee = validate_employee_access(db, employee_id, current_user, business_id)
         if not employee:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -4949,7 +4909,8 @@ async def save_employee_additional_info(
 
 @router.get("/employee-documents/{employee_id}")
 async def get_employee_documents(
-    employee_id: int,
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -4960,7 +4921,8 @@ async def get_employee_documents(
         # Validate employee access with business isolation
 
         
-        employee = validate_employee_access(db, employee_id, current_user)
+        validate_business_access(business_id, current_user, db)
+        employee = validate_employee_access(db, employee_id, current_user, business_id)
         if not employee:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -5013,7 +4975,8 @@ async def get_employee_documents(
 
 @router.post("/{employee_id}/documents")
 async def upload_employee_document(
-    employee_id: int,
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
     file: UploadFile = File(...),
     document_name: str = Body(...),
     document_type: str = Body(default="general"),
@@ -5029,10 +4992,9 @@ async def upload_employee_document(
         import uuid
         from datetime import datetime
         
-        # Validate employee exists
-        # Validate employee access with business isolation
-
-        employee = validate_employee_access(db, employee_id, current_user)
+        # Validate employee exists and belongs to the business
+        validate_business_access(business_id, current_user, db)
+        employee = validate_employee_access(db, employee_id, current_user, business_id)
         if not employee:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -5150,9 +5112,10 @@ async def upload_employee_document(
 
 @router.delete("/{employee_id}/documents/{document_id}")
 async def delete_employee_document(
-    employee_id: int,
     document_id: int,
     request: Request,
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -5161,10 +5124,8 @@ async def delete_employee_document(
         from app.models.employee import Employee, EmployeeDocument
         import os
         
-        # Validate employee exists
-        # Validate employee access with business isolation
-
-        employee = validate_employee_access(db, employee_id, current_user)
+        validate_business_access(business_id, current_user, db)
+        employee = validate_employee_access(db, employee_id, current_user, business_id)
         if not employee:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -5235,8 +5196,9 @@ async def delete_employee_document(
 
 @router.get("/{employee_id}/documents/{document_id}/download")
 async def download_employee_document(
-    employee_id: int,
     document_id: int,
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -5246,10 +5208,8 @@ async def download_employee_document(
         from fastapi.responses import FileResponse
         import os
         
-        # Validate employee exists
-        # Validate employee access with business isolation
-
-        employee = validate_employee_access(db, employee_id, current_user)
+        validate_business_access(business_id, current_user, db)
+        employee = validate_employee_access(db, employee_id, current_user, business_id)
         if not employee:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -5319,9 +5279,10 @@ async def download_employee_document(
 
 @router.patch("/{employee_id}/documents/{document_id}/visibility")
 async def update_document_visibility(
-    employee_id: int,
     document_id: int,
     request_data: dict = Body(...),
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -5329,6 +5290,10 @@ async def update_document_visibility(
     try:
         from app.models.employee import Employee, EmployeeDocument
         
+        # Validate employee and business
+        validate_business_access(business_id, current_user, db)
+        employee = validate_employee_access(db, employee_id, current_user, business_id)
+
         # Extract hidden value from request data
         if "hidden" not in request_data:
             raise HTTPException(
@@ -5394,7 +5359,8 @@ async def update_document_visibility(
 
 @router.get("/employee-assets/{employee_id}", response_model=EmployeeAssetsResponse)
 async def get_employee_assets(
-    employee_id: int,
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -5404,10 +5370,8 @@ async def get_employee_assets(
         from app.models.asset import Asset
         from app.schemas.asset import EmployeeAssetsResponse, AssetResponse, AssetTypeOption
         
-        # Validate employee access with business isolation
-
-        
-        employee = validate_employee_access(db, employee_id, current_user)
+        validate_business_access(business_id, current_user, db)
+        employee = validate_employee_access(db, employee_id, current_user, business_id)
         if not employee:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -5478,9 +5442,10 @@ async def get_employee_assets(
 
 @router.post("/{employee_id}/assets", response_model=AssetCreateResponse)
 async def create_employee_asset(
-    employee_id: int,
     asset_data: AssetCreateRequest,
     request: Request,
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -5492,10 +5457,8 @@ async def create_employee_asset(
         from datetime import datetime, date
         import uuid
         
-        # Validate employee exists
-        # Validate employee access with business isolation
-
-        employee = validate_employee_access(db, employee_id, current_user)
+        validate_business_access(business_id, current_user, db)
+        employee = validate_employee_access(db, employee_id, current_user, business_id)
         if not employee:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -5606,10 +5569,11 @@ async def create_employee_asset(
 
 @router.put("/{employee_id}/assets/{asset_id}", response_model=AssetUpdateResponse)
 async def update_employee_asset(
-    employee_id: int,
-    asset_id: int,
     asset_data: AssetUpdateRequest,
     request: Request,
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
+    asset_id: int = Path(..., description="Asset ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -5620,10 +5584,8 @@ async def update_employee_asset(
         from app.schemas.asset import AssetUpdateRequest, AssetUpdateResponse, AssetResponse
         from datetime import datetime
         
-        # Validate employee exists
-        # Validate employee access with business isolation
-
-        employee = validate_employee_access(db, employee_id, current_user)
+        validate_business_access(business_id, current_user, db)
+        employee = validate_employee_access(db, employee_id, current_user, business_id)
         if not employee:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -5740,9 +5702,10 @@ async def update_employee_asset(
 
 @router.delete("/{employee_id}/assets/{asset_id}", response_model=AssetDeleteResponse)
 async def delete_employee_asset(
-    employee_id: int,
-    asset_id: int,
     request: Request,
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
+    asset_id: int = Path(..., description="Asset ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -5753,10 +5716,8 @@ async def delete_employee_asset(
         from app.schemas.asset import AssetDeleteResponse
         from datetime import date
         
-        # Validate employee exists
-        # Validate employee access with business isolation
-
-        employee = validate_employee_access(db, employee_id, current_user)
+        validate_business_access(business_id, current_user, db)
+        employee = validate_employee_access(db, employee_id, current_user, business_id)
         if not employee:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -5824,7 +5785,8 @@ async def delete_employee_asset(
 
 @router.get("/employee-policies/{employee_id}")
 async def get_employee_policies(
-    employee_id: int,
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -5838,8 +5800,9 @@ async def get_employee_policies(
         from app.models.employee_leave_policy import EmployeeLeavePolicy
         from sqlalchemy.orm import joinedload
         
+        validate_business_access(business_id, current_user, db)
         # Validate employee access with business isolation
-        employee = validate_employee_access(db, employee_id, current_user)
+        employee = validate_employee_access(db, employee_id, current_user, business_id)
         
         # Get employee with basic policy relationships
         employee = db.query(Employee).options(
@@ -5847,7 +5810,7 @@ async def get_employee_policies(
             joinedload(Employee.weekoff_policy),
             joinedload(Employee.overtime_policy),
             joinedload(Employee.leave_policy_assignments).joinedload(EmployeeLeavePolicy.leave_policy)
-        ).filter(Employee.id == employee_id).first()
+        ).filter(Employee.id == employee_id, Employee.business_id == business_id).first()
         
         if not employee:
             raise HTTPException(
@@ -6006,9 +5969,10 @@ async def get_employee_policies(
 
 @router.put("/{employee_id}/policies")
 async def update_employee_policies(
-    employee_id: int,
     policies_data: EmployeePoliciesUpdate,
     request: Request,
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -6030,10 +5994,9 @@ async def update_employee_policies(
                 detail=str(e)
             )
         
-        # Check if employee exists
-        # Validate employee access with business isolation
-
-        employee = validate_employee_access(db, employee_id, current_user)
+        validate_business_access(business_id, current_user, db)
+        # Check if employee exists and belongs to business
+        employee = validate_employee_access(db, employee_id, current_user, business_id)
         if not employee:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -6247,7 +6210,8 @@ async def update_employee_policies(
 
 @router.get("/employee-permissions/{employee_id}")
 async def get_employee_permissions(
-    employee_id: int,
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ) -> EmployeePermissionsDisplay:
@@ -6255,10 +6219,8 @@ async def get_employee_permissions(
     try:
         from app.models.employee import Employee
         
-        # Validate employee access with business isolation
-
-        
-        employee = validate_employee_access(db, employee_id, current_user)
+        validate_business_access(business_id, current_user, db)
+        employee = validate_employee_access(db, employee_id, current_user, business_id)
         if not employee:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -6378,9 +6340,10 @@ async def get_employee_permissions(
 
 @router.put("/{employee_id}/permissions")
 async def update_employee_permissions(
-    employee_id: int,
     permissions_data: EmployeePermissionsFrontendUpdate,
     request: Request,
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ) -> EmployeePermissionsUpdateResponse:
@@ -6390,10 +6353,8 @@ async def update_employee_permissions(
         from app.models.employee_permissions import EmployeePermissions
         from app.schemas.employee_permissions import EmployeePermissionsUpdateResponse
         
-        # Validate employee exists
-        # Validate employee access with business isolation
-
-        employee = validate_employee_access(db, employee_id, current_user)
+        validate_business_access(business_id, current_user, db)
+        employee = validate_employee_access(db, employee_id, current_user, business_id)
         if not employee:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -6529,7 +6490,8 @@ async def update_employee_permissions(
 
 @router.get("/employee-access/{employee_id}")
 async def get_employee_access(
-    employee_id: int,
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ) -> EmployeeAccessDisplay:
@@ -6539,10 +6501,8 @@ async def get_employee_access(
         from app.models.employee_access import EmployeeAccess, EmployeeLoginSession
         from datetime import datetime
         
-        # Validate employee access with business isolation
-
-        
-        employee = validate_employee_access(db, employee_id, current_user)
+        validate_business_access(business_id, current_user, db)
+        employee = validate_employee_access(db, employee_id, current_user, business_id)
         if not employee:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -6623,9 +6583,10 @@ async def get_employee_access(
 
 @router.put("/{employee_id}/access")
 async def update_employee_access(
-    employee_id: int,
     access_data: EmployeeAccessFrontendUpdate,
     request: Request,
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ) -> EmployeeAccessUpdateResponse:
@@ -6634,10 +6595,8 @@ async def update_employee_access(
         from app.models.employee import Employee
         from app.models.employee_access import EmployeeAccess
         
-        # Validate employee exists
-        # Validate employee access with business isolation
-
-        employee = validate_employee_access(db, employee_id, current_user)
+        validate_business_access(business_id, current_user, db)
+        employee = validate_employee_access(db, employee_id, current_user, business_id)
         if not employee:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -6772,8 +6731,9 @@ async def update_employee_access(
 
 @router.post("/{employee_id}/access/send-mobile-login")
 async def send_mobile_login(
-    employee_id: int,
     request: Request,
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ) -> EmployeeAccessActionResponse:
@@ -6783,10 +6743,8 @@ async def send_mobile_login(
         from app.models.business import Business
         from app.services.email_service import email_service
         
-        # Validate employee access with business isolation
-
-        
-        employee = validate_employee_access(db, employee_id, current_user)
+        validate_business_access(business_id, current_user, db)
+        employee = validate_employee_access(db, employee_id, current_user, business_id)
         if not employee:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -6881,8 +6839,9 @@ async def send_mobile_login(
 
 @router.post("/{employee_id}/access/reset-mobile-pin")
 async def reset_mobile_pin(
-    employee_id: int,
     request: Request,
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -6893,10 +6852,8 @@ async def reset_mobile_pin(
         from app.services.email_service import email_service
         import random
         
-        # Validate employee access with business isolation
-
-        
-        employee = validate_employee_access(db, employee_id, current_user)
+        validate_business_access(business_id, current_user, db)
+        employee = validate_employee_access(db, employee_id, current_user, business_id)
         if not employee:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -6991,8 +6948,9 @@ async def reset_mobile_pin(
 
 @router.post("/{employee_id}/access/send-web-login")
 async def send_web_login(
-    employee_id: int,
     request: Request,
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -7002,10 +6960,8 @@ async def send_web_login(
         from app.models.business import Business
         from app.services.email_service import email_service
         
-        # Validate employee access with business isolation
-
-        
-        employee = validate_employee_access(db, employee_id, current_user)
+        validate_business_access(business_id, current_user, db)
+        employee = validate_employee_access(db, employee_id, current_user, business_id)
         if not employee:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -7096,7 +7052,8 @@ async def send_web_login(
 
 @router.post("/{employee_id}/access/send-runtime-workman")
 async def send_runtime_workman(
-    employee_id: int,
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -7107,10 +7064,8 @@ async def send_runtime_workman(
         from app.services.email_service import email_service
         import random
         
-        # Validate employee access with business isolation
-
-        
-        employee = validate_employee_access(db, employee_id, current_user)
+        validate_business_access(business_id, current_user, db)
+        employee = validate_employee_access(db, employee_id, current_user, business_id)
         if not employee:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -7179,8 +7134,9 @@ async def send_runtime_workman(
 
 @router.post("/{employee_id}/access/reset-web-password")
 async def reset_web_password(
-    employee_id: int,
     request: Request,
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -7192,10 +7148,8 @@ async def reset_web_password(
         import random
         import string
         
-        # Validate employee access with business isolation
-
-        
-        employee = validate_employee_access(db, employee_id, current_user)
+        validate_business_access(business_id, current_user, db)
+        employee = validate_employee_access(db, employee_id, current_user, business_id)
         if not employee:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -7283,8 +7237,9 @@ async def reset_web_password(
 
 @router.delete("/{employee_id}/access/logout-session/{session_id}")
 async def logout_session(
-    employee_id: int,
-    session_id: int,
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
+    session_id: int = Path(..., description="Session ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -7294,10 +7249,8 @@ async def logout_session(
         from app.models.employee_access import EmployeeLoginSession
         from datetime import datetime
         
-        # Validate employee access with business isolation
-
-        
-        employee = validate_employee_access(db, employee_id, current_user)
+        validate_business_access(business_id, current_user, db)
+        employee = validate_employee_access(db, employee_id, current_user, business_id)
         if not employee:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -7352,7 +7305,8 @@ async def logout_session(
 
 @router.get("/employee-activity/{employee_id}", response_model=EmployeeActivityResponse)
 async def get_employee_activity(
-    employee_id: int,
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -7364,7 +7318,11 @@ async def get_employee_activity(
         # Create activity log service
         activity_service = ActivityLogService(db)
         
-        # Get employee activity data
+        # Validate business and employee
+        validate_business_access(business_id, current_user, db)
+        employee = validate_employee_access(db, employee_id, current_user, business_id)
+
+        # Get employee activity data (service should respect business scoping)
         activity_data = activity_service.get_employee_activity(employee_id)
         
         return activity_data
@@ -7384,43 +7342,37 @@ async def get_employee_activity(
 
 @router.delete("/{employee_id}")
 async def delete_employee(
-    employee_id: int,
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
-    """Delete employee (soft delete by setting status to inactive)"""
+    """Deactivate (soft delete) an employee within the business scope."""
     try:
         from app.models.employee import Employee
-        
-        # Validate employee access with business isolation
 
-        
-        employee = validate_employee_access(db, employee_id, current_user)
+        # Validate access to the business and employee with strict business isolation
+        validate_business_access(business_id, current_user, db)
+        employee = validate_employee_access(db, employee_id, current_user, business_id)
         if not employee:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Employee with ID {employee_id} not found"
             )
-        
-        # Soft delete by setting status to inactive
-        employee.employee_status = "inactive"
-        if hasattr(employee, 'is_deleted'):
-            employee.is_deleted = True
-        
+
+        # Soft delete only: mark as inactive and unset active flag
+        employee.employee_status = "INACTIVE"
+        if hasattr(employee, 'is_active'):
+            employee.is_active = False
+
         db.commit()
         db.refresh(employee)
-        
+
         return {
             "success": True,
-            "message": f"Employee {employee.first_name} {employee.last_name} deleted successfully",
-            "employee": {
-                "id": employee.id,
-                "name": f"{employee.first_name} {employee.last_name}",
-                "code": employee.employee_code,
-                "status": "deleted"
-            }
+            "message": "Employee deactivated successfully"
         }
-    
+
     except HTTPException:
         raise
     except Exception as e:
@@ -7439,6 +7391,7 @@ async def delete_employee(
 @router.get("/salary/download-revisions")
 async def download_salary_revisions(
     employee_id: int = Query(..., description="Employee ID"),
+    business_id: int = Path(..., description="Business ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -7449,10 +7402,9 @@ async def download_salary_revisions(
         import io
         import csv
         
-        # Validate employee access with business isolation
-
-        
-        employee = validate_employee_access(db, employee_id, current_user)
+        # Validate business access and employee access with business isolation
+        validate_business_access(business_id, current_user, db)
+        employee = validate_employee_access(db, employee_id, current_user, business_id)
         if not employee:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -7528,22 +7480,22 @@ async def download_salary_revisions(
 @router.get("/search/managers")
 async def search_managers(
     query: str = Query(..., description="Search query for manager name"),
+    business_id: int = Path(..., description="Business ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
     """Search for managers (employees who can be reporting managers)"""
     try:
         from app.models.employee import Employee
-        
-        # Get user's business IDs for filtering
-        user_business_ids = get_user_business_ids(db, current_user)
-        
-        if not query or len(query.strip()) < 2 or not user_business_ids:
+        # Validate business access and restrict to this business
+        validate_business_access(business_id, current_user, db)
+
+        if not query or len(query.strip()) < 2:
             return {"managers": []}
-        
+
         search_term = f"%{query.strip()}%"
         managers = db.query(Employee).filter(
-            Employee.business_id.in_(user_business_ids),
+            Employee.business_id == business_id,
             (Employee.first_name.ilike(search_term)) |
             (Employee.last_name.ilike(search_term)) |
             (Employee.employee_code.ilike(search_term)),
@@ -7573,6 +7525,7 @@ async def search_managers(
 @router.post("/bulk")
 async def bulk_create_employees(
     bulk_data: BulkEmployeeCreate,
+    business_id: int = Path(..., description="Business ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -7580,6 +7533,9 @@ async def bulk_create_employees(
     try:
         from app.models.employee import Employee
         
+        # Validate user has access to this business
+        validate_business_access(business_id, current_user, db)
+
         employees_data = bulk_data.employees
         created_employees = []
         errors = []
@@ -7623,7 +7579,7 @@ async def bulk_create_employees(
                 
                 # Create employee
                 employee = Employee(
-                    business_id=getattr(current_user, 'business_id', 1),
+                    business_id=business_id,
                     first_name=employee_data.firstName,
                     last_name=employee_data.lastName,
                     email=employee_data.email,
@@ -7674,18 +7630,22 @@ async def bulk_create_employees(
 # EMPLOYEE WORK PROFILE MANAGEMENT ENDPOINTS
 # ============================================================================
 
-@router.get("/{employee_id}/work-profile")
+@router.get("/{employee_id:int}/work-profile")
 async def get_employee_work_profile_detailed(
-    employee_id: int,
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_admin)
+    current_user: User = Depends(get_current_user)
 ):
     """Get detailed employee work profile information"""
     try:
         from app.models.employee import Employee
         from sqlalchemy.orm import joinedload
-        
-        # Use joinedload to eagerly load all relationships
+
+        # Validate current user has access to business
+        validate_business_access(business_id, current_user, db)
+
+        # Use joinedload to eagerly load all relationships and enforce business isolation
         employee = db.query(Employee).options(
             joinedload(Employee.business),
             joinedload(Employee.location),
@@ -7695,12 +7655,15 @@ async def get_employee_work_profile_detailed(
             joinedload(Employee.grade),
             joinedload(Employee.reporting_manager),
             joinedload(Employee.profile)
-        ).filter(Employee.id == employee_id).first()
-        
+        ).filter(
+            Employee.id == employee_id,
+            Employee.business_id == business_id
+        ).first()
+
         if not employee:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Employee with ID {employee_id} not found"
+                detail="Employee not found"
             )
         
         # Get related data safely with proper fallbacks
@@ -7867,31 +7830,33 @@ async def get_employee_work_profile_detailed(
 
 @router.put("/{employee_id}/work-profile")
 async def update_employee_work_profile(
-    employee_id: int,
-    work_profile_data: EmployeeWorkProfileUpdateRequest,
-    request: Request,  # ADDED for activity logging
+    payload: EmployeeWorkProfileUpdate,
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
+    request: Request = None,  # ADDED for activity logging
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_admin)
+    current_user: User = Depends(get_current_user)
 ):
     """Update employee work profile"""
     try:
         from app.models.employee import Employee
         
         # Validate that at least one field is provided
-        if not any(getattr(work_profile_data, field) is not None for field in work_profile_data.__fields__):
+        if not payload.dict(exclude_unset=True):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="At least one field must be provided for update."
             )
-        
-        # Validate employee access with business isolation
-
-        
-        employee = validate_employee_access(db, employee_id, current_user)
+        # Validate business access and ensure employee belongs to the business
+        validate_business_access(business_id, current_user, db)
+        employee = db.query(Employee).filter(
+            Employee.id == employee_id,
+            Employee.business_id == business_id
+        ).first()
         if not employee:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Employee with ID {employee_id} not found"
+                detail="Employee not found"
             )
         
         # ACTIVITY LOGGING: Capture old values
@@ -7910,101 +7875,68 @@ async def update_employee_work_profile(
             "employee_status": employee.employee_status
         }
         
-        # Update work profile fields
+        # Update work profile fields - only allowed fields (business_id must not be changed)
         updated_fields = []
-        
-        if work_profile_data.businessId is not None:
-            from app.models.business import Business
-            business = db.query(Business).filter(Business.id == work_profile_data.businessId).first()
-            if not business:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Business with ID {work_profile_data.businessId} not found"
-                )
-            employee.business_id = work_profile_data.businessId
-            updated_fields.append("businessId")
-        
-        if work_profile_data.locationId is not None:
+
+        if payload.locationId is not None:
             from app.models.location import Location
-            location = db.query(Location).filter(Location.id == work_profile_data.locationId).first()
+            location = db.query(Location).filter(Location.id == payload.locationId, Location.business_id == business_id).first()
             if not location:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Location with ID {work_profile_data.locationId} not found"
-                )
-            employee.location_id = work_profile_data.locationId
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Location with ID {payload.locationId} not found")
+            employee.location_id = payload.locationId
             updated_fields.append("locationId")
         
-        if work_profile_data.costCenterId is not None:
+        if payload.costCenterId is not None:
             from app.models.cost_center import CostCenter
-            cost_center = db.query(CostCenter).filter(CostCenter.id == work_profile_data.costCenterId).first()
+            cost_center = db.query(CostCenter).filter(CostCenter.id == payload.costCenterId, CostCenter.business_id == business_id).first()
             if not cost_center:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Cost Center with ID {work_profile_data.costCenterId} not found"
-                )
-            employee.cost_center_id = work_profile_data.costCenterId
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Cost Center with ID {payload.costCenterId} not found")
+            employee.cost_center_id = payload.costCenterId
             updated_fields.append("costCenterId")
         
-        if work_profile_data.departmentId is not None:
+        if payload.departmentId is not None:
             from app.models.department import Department
-            department = db.query(Department).filter(Department.id == work_profile_data.departmentId).first()
+            department = db.query(Department).filter(Department.id == payload.departmentId, Department.business_id == business_id).first()
             if not department:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Department with ID {work_profile_data.departmentId} not found"
-                )
-            employee.department_id = work_profile_data.departmentId
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Department with ID {payload.departmentId} not found")
+            employee.department_id = payload.departmentId
             updated_fields.append("departmentId")
         
-        if work_profile_data.gradeId is not None:
+        if payload.gradeId is not None:
             from app.models.grades import Grade
-            try:
-                grade = db.query(Grade).filter(Grade.id == work_profile_data.gradeId).first()
-                if grade:
-                    employee.grade_id = work_profile_data.gradeId
-                    updated_fields.append("gradeId")
-                else:
-                    print(f"Warning: Grade with ID {work_profile_data.gradeId} not found, skipping update")
-            except Exception as e:
-                print(f"Warning: Could not update grade: {str(e)}")
+            grade = db.query(Grade).filter(Grade.id == payload.gradeId).first()
+            if not grade:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Grade with ID {payload.gradeId} not found")
+            employee.grade_id = payload.gradeId
+            updated_fields.append("gradeId")
         
-        if work_profile_data.designationId is not None:
+        if payload.designationId is not None:
             from app.models.designations import Designation
-            designation = db.query(Designation).filter(Designation.id == work_profile_data.designationId).first()
+            designation = db.query(Designation).filter(Designation.id == payload.designationId).first()
             if not designation:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Designation with ID {work_profile_data.designationId} not found"
-                )
-            employee.designation_id = work_profile_data.designationId
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Designation with ID {payload.designationId} not found")
+            employee.designation_id = payload.designationId
             updated_fields.append("designationId")
         
         # Update manager assignments
-        if work_profile_data.reportingManagerId is not None:
-            manager_id = work_profile_data.reportingManagerId
+        if payload.reportingManagerId is not None:
+            manager_id = payload.reportingManagerId
             if manager_id and manager_id > 0:
-                # Get user's business IDs for validation
-                user_business_ids = get_user_business_ids(db, current_user)
-                
-                # Validate that the manager exists and belongs to same business
+                # Validate that the manager exists and belongs to the same business
                 manager = db.query(Employee).filter(
                     Employee.id == manager_id,
-                    Employee.business_id.in_(user_business_ids)
+                    Employee.business_id == business_id
                 ).first()
                 if not manager:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail=f"Manager with ID {manager_id} not found"
-                    )
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Manager with ID {manager_id} not found in this business")
                 employee.reporting_manager_id = manager_id
             else:
                 employee.reporting_manager_id = None
             updated_fields.append("reportingManagerId")
         
         # Update shift and weekoff policies
-        if work_profile_data.shiftPolicyId is not None:
-            shift_policy_id = work_profile_data.shiftPolicyId
+        if payload.shiftPolicyId is not None:
+            shift_policy_id = payload.shiftPolicyId
             if shift_policy_id and shift_policy_id > 0:
                 try:
                     from app.models.shift_policy import ShiftPolicy
@@ -8018,8 +7950,8 @@ async def update_employee_work_profile(
                 employee.shift_policy_id = None
                 updated_fields.append("shiftPolicyId")
         
-        if work_profile_data.weekoffPolicyId is not None:
-            weekoff_policy_id = work_profile_data.weekoffPolicyId
+        if payload.weekoffPolicyId is not None:
+            weekoff_policy_id = payload.weekoffPolicyId
             if weekoff_policy_id and weekoff_policy_id > 0:
                 try:
                     from app.models.weekoff_policy import WeekOffPolicy
@@ -8034,10 +7966,10 @@ async def update_employee_work_profile(
                 updated_fields.append("weekoffPolicyId")
         
         # Update dates
-        if work_profile_data.confirmationDate is not None:
+        if payload.confirmationDate is not None:
             from datetime import datetime
             try:
-                confirmation_date = datetime.strptime(work_profile_data.confirmationDate, '%Y-%m-%d').date()
+                confirmation_date = datetime.strptime(payload.confirmationDate, '%Y-%m-%d').date()
                 employee.date_of_confirmation = confirmation_date
                 updated_fields.append("confirmationDate")
             except ValueError:
@@ -8046,10 +7978,10 @@ async def update_employee_work_profile(
                     detail="Invalid confirmation date format. Use YYYY-MM-DD format."
                 )
         
-        if work_profile_data.terminationDate is not None:
+        if payload.terminationDate is not None:
             from datetime import datetime
             try:
-                termination_date = datetime.strptime(work_profile_data.terminationDate, '%Y-%m-%d').date()
+                termination_date = datetime.strptime(payload.terminationDate, '%Y-%m-%d').date()
                 employee.date_of_termination = termination_date
                 updated_fields.append("terminationDate")
             except ValueError:
@@ -8059,8 +7991,8 @@ async def update_employee_work_profile(
                 )
         
         # Update employee status
-        if work_profile_data.employeeStatus is not None:
-            employee.employee_status = work_profile_data.employeeStatus
+        if payload.employeeStatus is not None:
+            employee.employee_status = payload.employeeStatus
             updated_fields.append("employeeStatus")
         
         # Update system fields
@@ -8122,13 +8054,7 @@ async def update_employee_work_profile(
         
         return {
             "success": True,
-            "message": "Work profile updated successfully",
-            "updatedFields": updated_fields,
-            "employee": {
-                "id": employee.id,
-                "name": f"{employee.first_name} {employee.last_name}",
-                "code": employee.employee_code or f"EMP{employee.id:03d}"
-            }
+            "message": "Employee work profile updated successfully"
         }
     
     except HTTPException:
@@ -8146,7 +8072,8 @@ async def update_employee_work_profile(
 
 @router.post("/{employee_id}/work-profile/revision")
 async def add_work_profile_revision(
-    employee_id: int,
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
     revision_data: WorkProfileRevisionRequest = Body(...),
     request: Request = None,
     db: Session = Depends(get_db),
@@ -8177,6 +8104,10 @@ async def add_work_profile_revision(
         from app.models.grades import Grade
         from datetime import datetime, date
         
+        # Validate business and employee
+        validate_business_access(business_id, current_user, db)
+        employee = validate_employee_access(db, employee_id, current_user, business_id)
+
         print(f"DEBUG: Adding work profile revision for employee {employee_id}")
         print(f"DEBUG: Revision data: {revision_data}")
         print(f"DEBUG: Raw manager IDs from request:")
@@ -8636,7 +8567,8 @@ async def add_work_profile_revision(
 
 @router.delete("/{employee_id}/work-profile/revision")
 async def delete_work_profile_revision(
-    employee_id: int,
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
     revision_date: str = Query(..., description="Revision date in YYYY-MM-DD format"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
@@ -8646,10 +8578,8 @@ async def delete_work_profile_revision(
         from app.models.employee import Employee
         from datetime import datetime
         
-        # Validate employee access with business isolation
-
-        
-        employee = validate_employee_access(db, employee_id, current_user)
+        validate_business_access(business_id, current_user, db)
+        employee = validate_employee_access(db, employee_id, current_user, business_id)
         if not employee:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -8695,7 +8625,8 @@ async def delete_work_profile_revision(
 
 @router.get("/{employee_id}/managers/search")
 async def search_managers_for_employee(
-    employee_id: int,
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
     query: str = Query("", description="Search query for manager name or employee code"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
@@ -8709,7 +8640,8 @@ async def search_managers_for_employee(
         # Verify employee exists
         # Validate employee access with business isolation
 
-        employee = validate_employee_access(db, employee_id, current_user)
+        validate_business_access(business_id, current_user, db)
+        employee = validate_employee_access(db, employee_id, current_user, business_id)
         if not employee:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -8717,15 +8649,13 @@ async def search_managers_for_employee(
             )
         
         # Build search query for potential managers
-        # Get user's business IDs for filtering
-        user_business_ids = get_user_business_ids(db, current_user)
-        
+        # Search managers only within the business
         managers_query = db.query(Employee).options(
             joinedload(Employee.designation),
             joinedload(Employee.department),
             joinedload(Employee.profile)
         ).filter(
-            Employee.business_id.in_(user_business_ids),
+            Employee.business_id == business_id,
             Employee.id != employee_id,  # Exclude the employee themselves
             Employee.employee_status == "active"
         )
@@ -8965,6 +8895,7 @@ async def remove_employee_manager(
 
 @router.get("/dropdown-options/work-profile/simple")
 async def get_work_profile_dropdown_options_simple(
+    business_id: int = Path(..., description="Business ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -8980,13 +8911,15 @@ async def get_work_profile_dropdown_options_simple(
         from app.models.designations import Designation
         from app.models.grades import Grade
         
-        # Query actual database for all dropdown data
-        businesses_db = db.query(Business).all()
-        locations_db = db.query(Location).all()
-        cost_centers_db = db.query(CostCenter).all()
-        departments_db = db.query(Department).all()
-        designations_db = db.query(Designation).all()
-        grades_db = db.query(Grade).all()
+        # Validate business access and then query scoped data
+        validate_business_access(business_id, current_user, db)
+
+        businesses_db = db.query(Business).filter(Business.id == business_id).all()
+        locations_db = db.query(Location).filter(Location.business_id == business_id).all()
+        cost_centers_db = db.query(CostCenter).filter(CostCenter.business_id == business_id).all()
+        departments_db = db.query(Department).filter(Department.business_id == business_id).all()
+        designations_db = db.query(Designation).filter(Designation.business_id == business_id).all()
+        grades_db = db.query(Grade).filter(Grade.business_id == business_id).all()
         
         # Convert to response format
         businesses = [
@@ -9088,6 +9021,7 @@ async def get_work_profile_dropdown_options_simple(
 
 @router.get("/dropdown-options/work-profile")
 async def get_work_profile_dropdown_options(
+    business_id: int = Path(..., description="Business ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -9095,8 +9029,9 @@ async def get_work_profile_dropdown_options(
     try:
         print("🔄 Loading dropdown options from DATABASE...")
         
-        # Get user's business IDs for filtering
-        user_business_ids = get_user_business_ids(db, current_user)
+        # Validate business access and filter for this business
+        validate_business_access(business_id, current_user, db)
+        user_business_ids = [business_id]
         
         # Initialize empty lists for safety
         businesses = []
@@ -9108,18 +9043,14 @@ async def get_work_profile_dropdown_options(
         # Try to get data from each table, with fallback handling
         try:
             from app.models.business import Business
-            businesses = db.query(Business).filter(
-                Business.id.in_(user_business_ids)
-            ).all()
+            businesses = db.query(Business).filter(Business.id.in_(user_business_ids)).all()
             print(f"✅ Loaded {len(businesses)} businesses")
         except Exception as e:
             print(f"Warning: Could not load businesses: {str(e)}")
         
         try:
             from app.models.location import Location
-            locations = db.query(Location).filter(
-                Location.business_id.in_(user_business_ids)
-            ).all()
+            locations = db.query(Location).filter(Location.business_id.in_(user_business_ids)).all()
             print(f"✅ Loaded {len(locations)} locations")
         except Exception as e:
             print(f"Warning: Could not load locations: {str(e)}")
@@ -9364,7 +9295,8 @@ class EmployeeAddressUpdate(BaseModel):
 
 @router.get("/{employee_id}/addresses")
 async def get_employee_addresses(
-    employee_id: int,
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -9372,10 +9304,8 @@ async def get_employee_addresses(
     try:
         from app.models.employee import Employee, EmployeeProfile
         
-        # Validate employee access with business isolation
-
-        
-        employee = validate_employee_access(db, employee_id, current_user)
+        validate_business_access(business_id, current_user, db)
+        employee = validate_employee_access(db, employee_id, current_user, business_id)
         if not employee:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -9442,8 +9372,9 @@ async def get_employee_addresses(
 
 @router.post("/{employee_id}/addresses")
 async def add_employee_address(
-    employee_id: int,
     address_data: EmployeeAddressCreate,
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -9451,10 +9382,8 @@ async def add_employee_address(
     try:
         from app.models.employee import Employee, EmployeeProfile
         
-        # Check if employee exists
-        # Validate employee access with business isolation
-
-        employee = validate_employee_access(db, employee_id, current_user)
+        validate_business_access(business_id, current_user, db)
+        employee = validate_employee_access(db, employee_id, current_user, business_id)
         if not employee:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -9540,10 +9469,11 @@ async def add_employee_address(
 
 @router.put("/{employee_id}/addresses/{address_type}")
 async def update_employee_address(
-    employee_id: int,
     address_type: str,
     address_data: EmployeeAddressUpdate,
     request: Request,
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -9565,10 +9495,8 @@ async def update_employee_address(
                 detail="Request body cannot be empty. At least one field must be provided for update."
             )
         
-        # Check if employee exists
-        # Validate employee access with business isolation
-
-        employee = validate_employee_access(db, employee_id, current_user)
+        validate_business_access(business_id, current_user, db)
+        employee = validate_employee_access(db, employee_id, current_user, business_id)
         if not employee:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -9797,8 +9725,9 @@ async def update_employee_address(
 
 @router.delete("/{employee_id}/addresses/{address_type}")
 async def delete_employee_address(
-    employee_id: int,
     address_type: str,
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -9813,10 +9742,8 @@ async def delete_employee_address(
                 detail="Address type must be either 'permanent' or 'present'"
             )
         
-        # Check if employee exists
-        # Validate employee access with business isolation
-
-        employee = validate_employee_access(db, employee_id, current_user)
+        validate_business_access(business_id, current_user, db)
+        employee = validate_employee_access(db, employee_id, current_user, business_id)
         if not employee:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -9954,7 +9881,8 @@ class EmployeeIdentityUpdate(BaseModel):
 
 @router.get("/{employee_id}/identity")
 async def get_employee_identity_detailed(
-    employee_id: int,
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -9962,10 +9890,8 @@ async def get_employee_identity_detailed(
     try:
         from app.models.employee import Employee, EmployeeProfile
         
-        # Validate employee access with business isolation
-
-        
-        employee = validate_employee_access(db, employee_id, current_user)
+        validate_business_access(business_id, current_user, db)
+        employee = validate_employee_access(db, employee_id, current_user, business_id)
         if not employee:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -10023,9 +9949,10 @@ async def get_employee_identity_detailed(
 
 @router.put("/{employee_id}/identity")
 async def update_employee_identity(
-    employee_id: int,
     identity_data: EmployeeIdentityUpdate,
     request: Request,
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -10040,10 +9967,8 @@ async def update_employee_identity(
                 detail="Request body cannot be empty. At least one field must be provided for update."
             )
         
-        # Check if employee exists
-        # Validate employee access with business isolation
-
-        employee = validate_employee_access(db, employee_id, current_user)
+        validate_business_access(business_id, current_user, db)
+        employee = validate_employee_access(db, employee_id, current_user, business_id)
         if not employee:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -10222,7 +10147,8 @@ async def update_employee_identity(
 
 @router.post("/{employee_id}/identity/verify-bank")
 async def verify_bank_details(
-    employee_id: int,
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -10230,10 +10156,8 @@ async def verify_bank_details(
     try:
         from app.models.employee import Employee, EmployeeProfile
         
-        # Validate employee access with business isolation
-
-        
-        employee = validate_employee_access(db, employee_id, current_user)
+        validate_business_access(business_id, current_user, db)
+        employee = validate_employee_access(db, employee_id, current_user, business_id)
         if not employee:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -10287,7 +10211,8 @@ async def verify_bank_details(
 
 @router.post("/{employee_id}/identity/verify-pan")
 async def verify_pan_details(
-    employee_id: int,
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -10295,10 +10220,8 @@ async def verify_pan_details(
     try:
         from app.models.employee import Employee, EmployeeProfile
         
-        # Validate employee access with business isolation
-
-        
-        employee = validate_employee_access(db, employee_id, current_user)
+        validate_business_access(business_id, current_user, db)
+        employee = validate_employee_access(db, employee_id, current_user, business_id)
         if not employee:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -10348,7 +10271,8 @@ async def verify_pan_details(
 
 @router.post("/{employee_id}/identity/verify-aadhar")
 async def verify_aadhar_details(
-    employee_id: int,
+    business_id: int = Path(..., description="Business ID"),
+    employee_id: int = Path(..., description="Employee ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -10356,10 +10280,8 @@ async def verify_aadhar_details(
     try:
         from app.models.employee import Employee, EmployeeProfile
         
-        # Validate employee access with business isolation
-
-        
-        employee = validate_employee_access(db, employee_id, current_user)
+        validate_business_access(business_id, current_user, db)
+        employee = validate_employee_access(db, employee_id, current_user, business_id)
         if not employee:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,

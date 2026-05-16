@@ -47,7 +47,7 @@ from app.schemas.allemployees_additional import (
 )
 from pydantic import ValidationError
 
-router = APIRouter(prefix="/{business_id}/employees", tags=["All Employees"])
+router = APIRouter(tags=["All Employees"])
 
 
 # ============================================================================

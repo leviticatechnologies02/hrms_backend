@@ -24,10 +24,10 @@ from app.models.onboarding import (
     BulkOnboarding, FormSubmission, OnboardingPolicy
 )
 from app.schemas.onboarding import (
-    OnboardingFormResponse, OnboardingFormCreate, OnboardingFormUpdate,
+    OnboardingResponseSchema, CreateOnboardingSchema, UpdateOnboardingSchema,
     OfferLetterCreate, OfferLetterResponse,
     OfferLetterTemplateCreate, OfferLetterTemplateResponse,
-    OnboardingDashboardResponse, PaginatedOnboardingResponse,
+    OnboardingDashboardResponse, OnboardingListResponse,
     OnboardingSettingsUpdate, OnboardingSettingsResponse,
     BulkOnboardingCreate, BulkOnboardingResponse,
     FormSubmissionCreate, FormSubmissionResponse,
@@ -631,7 +631,7 @@ async def update_onboarding_settings(
 # ---------------------------------------------------------------------------
 # Onboarding forms CRUD
 # ---------------------------------------------------------------------------
-@router.get("/", response_model=PaginatedOnboardingResponse)
+@router.get("/", response_model=OnboardingListResponse)
 async def list_onboarding_forms(
     business_id: int = Path(...),
     page: int = Query(1, ge=1),
@@ -656,15 +656,15 @@ async def list_onboarding_forms(
         total = query.count()
         offset = (page - 1) * limit
         forms = query.offset(offset).limit(limit).all()
-        return {"items": forms, "total": total, "page": page, "size": limit, "pages": (total + limit - 1) // limit}
+        return {"items": forms, "total": total, "page": page, "limit": limit}
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-@router.post("/", response_model=OnboardingFormResponse)
+@router.post("/", response_model=OnboardingResponseSchema)
 async def create_onboarding_form(
     business_id: int = Path(...),
-    form_data: OnboardingFormCreate = None,
+    form_data: CreateOnboardingSchema = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -679,7 +679,7 @@ async def create_onboarding_form(
 
 
 
-@router.get("/forms/{form_id:int}", response_model=OnboardingFormResponse)
+@router.get("/forms/{form_id:int}", response_model=OnboardingResponseSchema)
 async def get_onboarding_form(
     business_id: int = Path(...),
     form_id: int = Path(...),
@@ -696,25 +696,22 @@ async def get_onboarding_form(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-@router.put("/{form_id}", response_model=OnboardingFormResponse)
+@router.put("/{form_id}", response_model=OnboardingResponseSchema)
 async def update_onboarding_form(
     business_id: int = Path(...),
     form_id: int = Path(...),
-    form_data: OnboardingFormUpdate = None,
+    form_data: UpdateOnboardingSchema = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
     validate_business_access(business_id, current_user, db)
     try:
-        form = validate_form_access(db, form_id, business_id, current_user)
-        update_data = form_data.dict(exclude_unset=True)
-        for field, value in update_data.items():
-            if hasattr(form, field):
-                setattr(form, field, value)
-        form.updated_at = datetime.now()
-        db.commit()
-        db.refresh(form)
-        return form
+        # Use service layer to handle nested fields and response shaping
+        service = OnboardingService(db)
+        result = service.update_onboarding_form(form_id, form_data, business_id)
+        if result is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Onboarding form not found")
+        return result
     except HTTPException:
         raise
     except Exception as e:
@@ -746,7 +743,7 @@ async def delete_onboarding_form(
 # ---------------------------------------------------------------------------
 # Send / Submit / Approve / Reject endpoints
 # ---------------------------------------------------------------------------
-@router.post("/{form_id}/send", response_model=OnboardingFormResponse)
+@router.post("/{form_id}/send", response_model=OnboardingResponseSchema)
 async def send_onboarding_form(
     business_id: int = Path(...),
     form_id: int = Path(...),
@@ -797,7 +794,7 @@ async def submit_onboarding_form(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-@router.post("/{form_id}/approve", response_model=OnboardingFormResponse)
+@router.post("/{form_id}/approve", response_model=OnboardingResponseSchema)
 async def approve_onboarding_form(
     business_id: int = Path(...),
     form_id: int = Path(...),
@@ -876,7 +873,7 @@ async def approve_onboarding_form(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-@router.post("/{form_id}/reject", response_model=OnboardingFormResponse)
+@router.post("/{form_id}/reject", response_model=OnboardingResponseSchema)
 async def reject_onboarding_form(
     business_id: int = Path(...),
     form_id: int = Path(...),
@@ -1220,10 +1217,10 @@ from app.models.onboarding import (
     BulkOnboarding, FormSubmission, OnboardingPolicy
 )
 from app.schemas.onboarding import (
-    OnboardingFormResponse, OnboardingFormCreate, OnboardingFormUpdate,
+    OnboardingResponseSchema, CreateOnboardingSchema, UpdateOnboardingSchema,
     OfferLetterCreate, OfferLetterResponse,
     OfferLetterTemplateCreate, OfferLetterTemplateResponse,
-    OnboardingDashboardResponse, PaginatedOnboardingResponse,
+    OnboardingDashboardResponse, OnboardingListResponse,
     OnboardingSettingsUpdate, OnboardingSettingsResponse,
     BulkOnboardingCreate, BulkOnboardingResponse,
     FormSubmissionCreate, FormSubmissionResponse,
@@ -1837,7 +1834,7 @@ async def update_onboarding_settings(
 # ---------------------------------------------------------------------------
 # List forms (paginated)
 # ---------------------------------------------------------------------------
-@router.get("/", response_model=PaginatedOnboardingResponse)
+@router.get("/", response_model=OnboardingListResponse)
 async def list_onboarding_forms(
     business_id: int = Path(..., description="Business ID"),
     page: int = Query(1, ge=1),
@@ -1862,7 +1859,34 @@ async def list_onboarding_forms(
         total = query.count()
         offset = (page - 1) * limit
         forms = query.offset(offset).limit(limit).all()
-        return {"items": forms, "total": total, "page": page, "size": limit, "pages": (total + limit - 1) // limit}
+        items = []
+        for form in forms:
+            items.append({
+                "id": form.id,
+                "business_id": form.business_id,
+                "candidate_name": form.candidate_name,
+                "candidate_email": form.candidate_email,
+                "candidate_mobile": form.candidate_mobile,
+                "form_token": form.form_token,
+                "status": form.status.value if form.status else None,
+                "verify_mobile": form.verify_mobile,
+                "verify_pan": form.verify_pan,
+                "verify_bank": form.verify_bank,
+                "verify_aadhaar": form.verify_aadhaar,
+                "notes": form.notes,
+                "policies": form.policies,
+                "offer_letter": form.offer_letter,
+                "salary_options": form.salary_options,
+                "created_at": form.created_at,
+                "sent_at": form.sent_at,
+                "submitted_at": form.submitted_at,
+                "approved_at": form.approved_at,
+                "rejected_at": form.rejected_at,
+                "expires_at": form.expires_at,
+                "rejection_reason": form.rejection_reason,
+                "created_by": form.created_by
+            })
+        return {"items": items, "total": total, "page": page, "limit": limit}
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
@@ -1870,10 +1894,10 @@ async def list_onboarding_forms(
 # ---------------------------------------------------------------------------
 # Create form
 # ---------------------------------------------------------------------------
-@router.post("/", response_model=OnboardingFormResponse)
+@router.post("/", response_model=OnboardingResponseSchema)
 async def create_onboarding_form(
     business_id: int = Path(..., description="Business ID"),
-    form_data: OnboardingFormCreate = None,
+    form_data: CreateOnboardingSchema = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -1889,7 +1913,7 @@ async def create_onboarding_form(
 # ---------------------------------------------------------------------------
 # Approve / Reject / Bulk / Update / Send
 # ---------------------------------------------------------------------------
-@router.post("/{form_id}/approve", response_model=OnboardingFormResponse)
+@router.post("/{form_id}/approve", response_model=OnboardingResponseSchema)
 async def approve_onboarding_form(
     business_id: int = Path(..., description="Business ID"),
     form_id: int = Path(..., description="Form ID"),
@@ -1965,7 +1989,7 @@ async def approve_onboarding_form(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-@router.post("/{form_id}/reject", response_model=OnboardingFormResponse)
+@router.post("/{form_id}/reject", response_model=OnboardingResponseSchema)
 async def reject_onboarding_form(
     business_id: int = Path(..., description="Business ID"),
     form_id: int = Path(..., description="Form ID"),
@@ -2001,11 +2025,11 @@ async def create_bulk_onboarding(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-@router.put("/{form_id}", response_model=OnboardingFormResponse)
+@router.put("/{form_id}", response_model=OnboardingResponseSchema)
 async def update_onboarding_form(
     business_id: int = Path(..., description="Business ID"),
     form_id: int = Path(..., description="Form ID"),
-    form_data: OnboardingFormUpdate = None,
+    form_data: UpdateOnboardingSchema = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -2029,7 +2053,7 @@ async def update_onboarding_form(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-@router.post("/{form_id}/send", response_model=OnboardingFormResponse)
+@router.post("/{form_id}/send", response_model=OnboardingResponseSchema)
 async def send_onboarding_form(
     business_id: int = Path(..., description="Business ID"),
     form_id: int = Path(..., description="Form ID"),
@@ -2161,7 +2185,7 @@ async def get_credit_pricing(
 # ---------------------------------------------------------------------------
 # Get form by id
 # ---------------------------------------------------------------------------
-@router.get("/forms/{form_id:int}", response_model=OnboardingFormResponse)
+@router.get("/forms/{form_id:int}", response_model=OnboardingResponseSchema)
 async def get_onboarding_form(
     business_id: int = Path(..., description="Business ID"),
     form_id: int = Path(..., description="Form ID"),
@@ -2356,7 +2380,7 @@ async def get_forms_for_frontend(
 @router.post("/forms/create", response_model=dict)
 async def create_form_frontend_compatible(
     business_id: int = Path(..., description="Business ID"),
-    form_data: OnboardingFormCreate = None,
+    form_data: CreateOnboardingSchema = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):

@@ -16,7 +16,7 @@ from ..repositories.onboarding_repository import (
 )
 from ..models.onboarding import OnboardingForm, OnboardingStatus
 from ..schemas.onboarding import (
-    OnboardingFormCreate, OnboardingFormUpdate, BulkOnboardingCreate,
+    CreateOnboardingSchema, UpdateOnboardingSchema, BulkOnboardingCreate,
     FormSubmissionCreate, OnboardingSettingsUpdate
 )
 
@@ -39,22 +39,21 @@ class OnboardingService:
     # ONBOARDING FORM OPERATIONS
     # =============================================================================
     
-    def create_onboarding_form(self, form_data: OnboardingFormCreate, business_id: int, user_id: int) -> OnboardingForm:
+    def create_onboarding_form(self, form_data: CreateOnboardingSchema, business_id: int, user_id: int) -> OnboardingForm:
         """Create a new onboarding form"""
         # Generate unique form token
         form_token = str(uuid.uuid4())
-        
-        # Calculate expiry date (7 days from now)
-        expires_at = datetime.now() + timedelta(days=7)
-        
-        # Create form data
+        # Calculate expiry date (use provided or default 7 days)
+        expires_at = getattr(form_data, 'expires_at', None) or (datetime.now() + timedelta(days=7))
+
+        # Create form data - only include columns that exist on the model
         create_data = {
             "business_id": business_id,
             "candidate_name": form_data.candidate_name,
             "candidate_email": form_data.candidate_email,
             "candidate_mobile": form_data.candidate_mobile,
             "form_token": form_token,
-            "status": OnboardingStatus.DRAFT,
+            "status": OnboardingStatus.DRAFT if not getattr(form_data, 'status', None) else form_data.status,
             "verify_mobile": form_data.verify_mobile,
             "verify_pan": form_data.verify_pan,
             "verify_bank": form_data.verify_bank,
@@ -64,8 +63,37 @@ class OnboardingService:
             "created_by": user_id,
             "created_at": datetime.now()
         }
-        
-        return self.onboarding_repo.create(create_data)
+
+        form = self.onboarding_repo.create(create_data)
+
+        # Build response dict combining stored fields and nested objects from request
+        response = {
+            "id": form.id,
+            "business_id": form.business_id,
+            "candidate_name": form.candidate_name,
+            "candidate_email": form.candidate_email,
+            "candidate_mobile": form.candidate_mobile,
+            "form_token": form.form_token,
+            "status": form.status.value if form.status else None,
+            "verify_mobile": form.verify_mobile,
+            "verify_pan": form.verify_pan,
+            "verify_bank": form.verify_bank,
+            "verify_aadhaar": form.verify_aadhaar,
+            "notes": form.notes,
+            "policies": getattr(form_data, 'policies', None),
+            "offer_letter": getattr(form_data, 'offer_letter', None),
+            "salary_options": getattr(form_data, 'salary_options', None),
+            "created_at": form.created_at,
+            "sent_at": form.sent_at,
+            "submitted_at": form.submitted_at,
+            "approved_at": form.approved_at,
+            "rejected_at": form.rejected_at,
+            "expires_at": form.expires_at,
+            "rejection_reason": form.rejection_reason,
+            "created_by": form.created_by
+        }
+
+        return response
     
     def get_onboarding_form(self, form_id: int, business_id: int = None) -> Optional[OnboardingForm]:
         """Get onboarding form by ID"""
@@ -81,17 +109,52 @@ class OnboardingService:
         """Get onboarding forms for a business"""
         return self.onboarding_repo.get_by_business_id(business_id, skip, limit)
     
-    def update_onboarding_form(self, form_id: int, form_data: OnboardingFormUpdate, business_id: int = None) -> Optional[OnboardingForm]:
+    def update_onboarding_form(self, form_id: int, form_data: UpdateOnboardingSchema, business_id: int = None) -> Optional[OnboardingForm]:
         """Update onboarding form"""
         form = self.get_onboarding_form(form_id, business_id)
         if not form:
             return None
-        
-        # Prepare update data
+
+        # Prepare update data for DB columns
         update_data = form_data.dict(exclude_unset=True)
+        # Remove nested objects before passing to DB update
+        nested = {}
+        for key in ['policies', 'offer_letter', 'salary_options']:
+            if key in update_data:
+                nested[key] = update_data.pop(key)
+
         update_data["updated_at"] = datetime.now()
-        
-        return self.onboarding_repo.update(form, update_data)
+
+        updated_form = self.onboarding_repo.update(form, update_data)
+
+        # Build response merging stored and nested
+        response = {
+            "id": updated_form.id,
+            "business_id": updated_form.business_id,
+            "candidate_name": updated_form.candidate_name,
+            "candidate_email": updated_form.candidate_email,
+            "candidate_mobile": updated_form.candidate_mobile,
+            "form_token": updated_form.form_token,
+            "status": updated_form.status.value if updated_form.status else None,
+            "verify_mobile": updated_form.verify_mobile,
+            "verify_pan": updated_form.verify_pan,
+            "verify_bank": updated_form.verify_bank,
+            "verify_aadhaar": updated_form.verify_aadhaar,
+            "notes": updated_form.notes,
+            "policies": nested.get('policies', None),
+            "offer_letter": nested.get('offer_letter', None),
+            "salary_options": nested.get('salary_options', None),
+            "created_at": updated_form.created_at,
+            "sent_at": updated_form.sent_at,
+            "submitted_at": updated_form.submitted_at,
+            "approved_at": updated_form.approved_at,
+            "rejected_at": updated_form.rejected_at,
+            "expires_at": updated_form.expires_at,
+            "rejection_reason": updated_form.rejection_reason,
+            "created_by": updated_form.created_by
+        }
+
+        return response
     
     def delete_onboarding_form(self, form_id: int, business_id: int = None) -> bool:
         """Soft delete onboarding form"""
@@ -502,15 +565,8 @@ class OnboardingService:
         return {
             "id": settings.id,
             "business_id": settings.business_id,
-
             "fields": field_requirements,
             "documents": document_requirements,
-
-            "form_expiry_days": settings.form_expiry_days or 7,
-            "send_welcome_email": settings.send_welcome_email if settings.send_welcome_email is not None else True,
-            "send_reminder_emails": settings.send_reminder_emails if settings.send_reminder_emails is not None else True,
-            "default_verify_mobile": settings.default_verify_mobile if settings.default_verify_mobile is not None else True,
-
             "created_at": settings.created_at,
             "updated_at": settings.updated_at,
             "created_by": settings.created_by

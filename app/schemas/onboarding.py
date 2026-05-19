@@ -19,6 +19,28 @@ class OnboardingStatusEnum(str, Enum):
 
 
 # Base schemas
+# Nested explicit schemas to ensure Swagger shows concrete fields
+class PoliciesSchema(BaseModel):
+    weekoff_policy_id: int
+    shift_policy_id: int
+    work_shift_id: int
+
+
+class OfferLetterSchema(BaseModel):
+    designation: str
+    department: str
+    joining_date: date
+    salary: float
+
+
+class SalaryOptionsSchema(BaseModel):
+    ctc: float
+    basic: float
+    hra: float
+    special_allowance: float
+
+
+# Base schemas
 class OnboardingFormBase(BaseModel):
     candidate_name: str = Field(..., min_length=2, max_length=255)
     candidate_email: EmailStr
@@ -28,9 +50,64 @@ class OnboardingFormBase(BaseModel):
     verify_bank: bool = False
     verify_aadhaar: bool = False
     notes: Optional[str] = None
-    policies: Optional[List[int]] = None
-    offer_letter: Optional[Dict[str, Any]] = None
-    salary_options: Optional[Dict[str, Any]] = None
+    # Nested objects
+    policies: Optional[PoliciesSchema] = None
+    offer_letter: Optional[OfferLetterSchema] = None
+    salary_options: Optional[SalaryOptionsSchema] = None
+
+
+# Nested explicit schemas to ensure Swagger shows concrete fields
+class CreateOnboardingSchema(BaseModel):
+    candidate_name: str = Field(..., min_length=2, max_length=255)
+    candidate_email: EmailStr
+    candidate_mobile: str = Field(..., min_length=10, max_length=20)
+
+    verify_mobile: bool = True
+    verify_pan: bool = False
+    verify_bank: bool = False
+    verify_aadhaar: bool = False
+
+    notes: Optional[str] = None
+
+    policies: PoliciesSchema
+
+    offer_letter: OfferLetterSchema
+
+    salary_options: SalaryOptionsSchema
+
+
+class UpdateOnboardingSchema(CreateOnboardingSchema):
+    status: Optional[str] = None
+    expires_at: Optional[datetime] = None
+
+
+class OnboardingResponseSchema(CreateOnboardingSchema):
+    id: int
+    business_id: int
+    form_token: str
+    status: str
+
+    created_at: datetime
+    sent_at: Optional[datetime] = None
+    submitted_at: Optional[datetime] = None
+    approved_at: Optional[datetime] = None
+    rejected_at: Optional[datetime] = None
+    expires_at: Optional[datetime] = None
+
+    rejection_reason: Optional[str] = None
+    # Response may come from DB where nested objects are not stored yet
+    policies: Optional[PoliciesSchema] = None
+    offer_letter: Optional[OfferLetterSchema] = None
+    salary_options: Optional[SalaryOptionsSchema] = None
+
+    model_config = {"from_attributes": True}
+
+
+class OnboardingListResponse(BaseModel):
+    items: List[OnboardingResponseSchema]
+    total: int
+    page: int
+    limit: int
 
 
 class OnboardingFormCreate(OnboardingFormBase):
@@ -46,9 +123,9 @@ class OnboardingFormUpdate(BaseModel):
     verify_bank: Optional[bool] = None
     verify_aadhaar: Optional[bool] = None
     notes: Optional[str] = None
-    policies: Optional[List[int]] = None
-    offer_letter: Optional[Dict[str, Any]] = None
-    salary_options: Optional[Dict[str, Any]] = None
+    policies: Optional[PoliciesSchema] = None
+    offer_letter: Optional[OfferLetterSchema] = None
+    salary_options: Optional[SalaryOptionsSchema] = None
     status: Optional[str] = None
     verify_mobile: Optional[bool] = None
     verify_pan: Optional[bool] = None
@@ -56,6 +133,11 @@ class OnboardingFormUpdate(BaseModel):
     verify_aadhaar: Optional[bool] = None
     notes: Optional[str] = None
     expires_at: Optional[datetime] = None
+
+    # Nested update objects
+    policies: Optional[PoliciesSchema] = None
+    offer_letter: Optional[OfferLetterSchema] = None
+    salary_options: Optional[SalaryOptionsSchema] = None
 
 
 class OnboardingFormResponse(OnboardingFormBase):
@@ -71,9 +153,9 @@ class OnboardingFormResponse(OnboardingFormBase):
     expires_at: Optional[datetime] = None
     rejection_reason: Optional[str] = None
     employee_id: Optional[int] = None
-    policies: Optional[List[int]] = None
-    offer_letter: Optional[Dict[str, Any]] = None
-    salary_options: Optional[Dict[str, Any]] = None
+    policies: Optional[PoliciesSchema] = None
+    offer_letter: Optional[OfferLetterSchema] = None
+    salary_options: Optional[SalaryOptionsSchema] = None
     
     class Config:
         from_attributes = True
@@ -387,14 +469,93 @@ class BulkOnboardingResponse(BaseModel):
 
 
 # Settings schemas
-class OnboardingSettingsUpdate(BaseModel):
-    fields: Dict[str, bool]
-    documents: Dict[str, bool]
+# New explicit nested schemas for settings (avoid generic dicts)
+class FieldsSchema(BaseModel):
+    present_address: bool = False
+    permanent_address: bool = False
+    bank_details: bool = False
 
-    form_expiry_days: int
-    send_welcome_email: bool
-    send_reminder_emails: bool
-    default_verify_mobile: bool
+
+class DocumentsSchema(BaseModel):
+    pan_card: bool = False
+    adhar_card: bool = False
+    esi_card: bool = False
+    driving_license: bool = False
+    passport: bool = False
+    voter_id: bool = False
+    last_relieving_letter: bool = False
+    last_salary_slip: bool = False
+    latest_bank_statement: bool = False
+    highest_education_proof: bool = False
+
+
+class OnboardingSettingsUpdateSchema(BaseModel):
+    fields: FieldsSchema
+    documents: DocumentsSchema
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "fields": {
+                    "present_address": True,
+                    "permanent_address": True,
+                    "bank_details": True
+                },
+                "documents": {
+                    "pan_card": True,
+                    "adhar_card": True,
+                    "esi_card": False,
+                    "driving_license": False,
+                    "passport": False,
+                    "voter_id": False,
+                    "last_relieving_letter": False,
+                    "last_salary_slip": False,
+                    "latest_bank_statement": False,
+                    "highest_education_proof": True
+                }
+            }
+        }
+
+
+# Response schema includes metadata
+class OnboardingSettingsResponseSchema(OnboardingSettingsUpdateSchema):
+    id: int
+    business_id: int
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+    created_by: Optional[int] = None
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "id": 1,
+                "business_id": 1,
+                "fields": {
+                    "present_address": True,
+                    "permanent_address": True,
+                    "bank_details": True
+                },
+                "documents": {
+                    "pan_card": True,
+                    "adhar_card": True,
+                    "esi_card": False,
+                    "driving_license": False,
+                    "passport": False,
+                    "voter_id": False,
+                    "last_relieving_letter": False,
+                    "last_salary_slip": False,
+                    "latest_bank_statement": False,
+                    "highest_education_proof": True
+                },
+                "created_at": "2026-05-19T00:00:00Z",
+                "updated_at": "2026-05-19T00:00:00Z",
+                "created_by": 1
+            }
+        }
+
+# Alias old names for compatibility
+OnboardingSettingsUpdate = OnboardingSettingsUpdateSchema
+OnboardingSettingsResponse = OnboardingSettingsResponseSchema
 
 
 # Diagnostic/debug response schema
@@ -451,17 +612,7 @@ class DebugEnvironmentResponse(BaseModel):
         return v
 
 
-class OnboardingSettingsResponse(OnboardingSettingsUpdate):
-    id: int
-    business_id: int
-    created_at: datetime
-    updated_at: Optional[datetime] = None
-    created_by: Optional[int] = None
-
-    class Config:
-        from_attributes = True
-
-
+# OnboardingSettingsResponse class removed; use OnboardingSettingsResponseSchema via alias
 # Dashboard and statistics schemas
 class OnboardingDashboardResponse(BaseModel):
     total_forms: int
@@ -494,8 +645,7 @@ class PaginatedOnboardingResponse(BaseModel):
     items: List[OnboardingFormResponse]
     total: int
     page: int
-    size: int
-    pages: int
+    limit: int
 
 
 # Action schemas

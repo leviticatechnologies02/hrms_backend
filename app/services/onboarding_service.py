@@ -66,34 +66,8 @@ class OnboardingService:
 
         form = self.onboarding_repo.create(create_data)
 
-        # Build response dict combining stored fields and nested objects from request
-        response = {
-            "id": form.id,
-            "business_id": form.business_id,
-            "candidate_name": form.candidate_name,
-            "candidate_email": form.candidate_email,
-            "candidate_mobile": form.candidate_mobile,
-            "form_token": form.form_token,
-            "status": form.status.value if form.status else None,
-            "verify_mobile": form.verify_mobile,
-            "verify_pan": form.verify_pan,
-            "verify_bank": form.verify_bank,
-            "verify_aadhaar": form.verify_aadhaar,
-            "notes": form.notes,
-            "policies": getattr(form_data, 'policies', None),
-            "offer_letter": getattr(form_data, 'offer_letter', None),
-            "salary_options": getattr(form_data, 'salary_options', None),
-            "created_at": form.created_at,
-            "sent_at": form.sent_at,
-            "submitted_at": form.submitted_at,
-            "approved_at": form.approved_at,
-            "rejected_at": form.rejected_at,
-            "expires_at": form.expires_at,
-            "rejection_reason": form.rejection_reason,
-            "created_by": form.created_by
-        }
-
-        return response
+        # Keep DB model as return value so callers can access attributes like .id
+        return form
     
     def get_onboarding_form(self, form_id: int, business_id: int = None) -> Optional[OnboardingForm]:
         """Get onboarding form by ID"""

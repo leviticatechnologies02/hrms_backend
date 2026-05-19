@@ -7524,9 +7524,10 @@ def create_professional_tax_sample_data():
             db.add(pt_settings)
             db.flush()
             
-            # Add component mappings
+            # Add component mappings (include business_id to satisfy NOT NULL constraint)
             for comp in default_components:
                 mapping = PTComponentMapping(
+                    business_id=business.id,
                     pt_settings_id=pt_settings.id,
                     **comp
                 )
@@ -7566,6 +7567,7 @@ def create_professional_tax_sample_data():
             
             for rate_data in pt_rates:
                 rate = ProfessionalTaxRate(
+                    business_id=business.id,
                     pt_settings_id=pt_settings.id,
                     **rate_data
                 )

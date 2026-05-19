@@ -485,41 +485,32 @@ class OnboardingService:
         # Parse JSON fields for response
         document_requirements = {}
         field_requirements = {}
-        
+
         try:
             if settings.document_requirements:
                 document_requirements = json.loads(settings.document_requirements)
         except (json.JSONDecodeError, TypeError):
             document_requirements = {}
-        
+
         try:
             if settings.field_requirements:
                 field_requirements = json.loads(settings.field_requirements)
         except (json.JSONDecodeError, TypeError):
             field_requirements = {}
-        
+
+        # Map storage to new API shape: `fields` and `documents` with snake_case keys
         return {
             "id": settings.id,
             "business_id": settings.business_id,
+
+            "fields": field_requirements,
+            "documents": document_requirements,
+
             "form_expiry_days": settings.form_expiry_days or 7,
-            "allow_form_editing": settings.allow_form_editing if settings.allow_form_editing is not None else True,
-            "require_document_upload": settings.require_document_upload if settings.require_document_upload is not None else True,
             "send_welcome_email": settings.send_welcome_email if settings.send_welcome_email is not None else True,
             "send_reminder_emails": settings.send_reminder_emails if settings.send_reminder_emails is not None else True,
-            "reminder_frequency_days": settings.reminder_frequency_days or 2,
             "default_verify_mobile": settings.default_verify_mobile if settings.default_verify_mobile is not None else True,
-            "default_verify_pan": settings.default_verify_pan if settings.default_verify_pan is not None else False,
-            "default_verify_bank": settings.default_verify_bank if settings.default_verify_bank is not None else False,
-            "default_verify_aadhaar": settings.default_verify_aadhaar if settings.default_verify_aadhaar is not None else False,
-            "enable_auto_approval": settings.enable_auto_approval if settings.enable_auto_approval is not None else False,
-            "auto_approval_criteria": settings.auto_approval_criteria,
-            "custom_fields": settings.custom_fields,
-            "welcome_email_template": settings.welcome_email_template,
-            "reminder_email_template": settings.reminder_email_template,
-            "approval_email_template": settings.approval_email_template,
-            "rejection_email_template": settings.rejection_email_template,
-            "document_requirements": document_requirements,
-            "field_requirements": field_requirements,
+
             "created_at": settings.created_at,
             "updated_at": settings.updated_at,
             "created_by": settings.created_by
@@ -533,29 +524,30 @@ class OnboardingService:
             # Create new settings if none exist
             settings = self.settings_repo.create_default_settings(business_id, user_id)
         
+
         # Prepare update data
         update_data = settings_data.dict(exclude_unset=True)
-        
-        # Handle JSON fields with proper validation
-        if "document_requirements" in update_data and update_data["document_requirements"] is not None:
+
+        # Accept new API shape: `documents` and `fields` and convert to storage keys
+        if "documents" in update_data and update_data["documents"] is not None:
             try:
-                update_data["document_requirements"] = json.dumps(update_data["document_requirements"])
+                update_data["document_requirements"] = json.dumps(update_data.pop("documents"))
             except (TypeError, ValueError) as e:
-                raise ValueError(f"Invalid document_requirements format: {str(e)}")
-        
-        if "field_requirements" in update_data and update_data["field_requirements"] is not None:
+                raise ValueError(f"Invalid documents format: {str(e)}")
+
+        if "fields" in update_data and update_data["fields"] is not None:
             try:
-                update_data["field_requirements"] = json.dumps(update_data["field_requirements"])
+                update_data["field_requirements"] = json.dumps(update_data.pop("fields"))
             except (TypeError, ValueError) as e:
-                raise ValueError(f"Invalid field_requirements format: {str(e)}")
+                raise ValueError(f"Invalid fields format: {str(e)}")
         
-        # Validate JSON fields if they exist
+        # Validate JSON fields if they exist (legacy keys remain supported)
         if "auto_approval_criteria" in update_data and update_data["auto_approval_criteria"]:
             try:
                 json.loads(update_data["auto_approval_criteria"])
             except json.JSONDecodeError:
                 raise ValueError("Invalid auto_approval_criteria JSON format")
-        
+
         if "custom_fields" in update_data and update_data["custom_fields"]:
             try:
                 json.loads(update_data["custom_fields"])
@@ -573,30 +565,34 @@ class OnboardingService:
         settings_data = self.get_onboarding_settings(business_id, user_id)
         
         # Convert document requirements to frontend format (array of booleans)
+        # Map display names to storage keys (snake_case)
         frontend_documents = [
-            "PAN Card",
-            "Adhar Card", 
-            "ESI Card",
-            "Driving License",
-            "Passport",
-            "Voter ID",
-            "Last Relieving Letter",
-            "Last Salary Slip",
-            "Latest Bank Statement",
-            "Highest Education Proof"
+            ("PAN Card", "pan_card"),
+            ("Adhar Card", "adhar_card"),
+            ("ESI Card", "esi_card"),
+            ("Driving License", "driving_license"),
+            ("Passport", "passport"),
+            ("Voter ID", "voter_id"),
+            ("Last Relieving Letter", "last_relieving_letter"),
+            ("Last Salary Slip", "last_salary_slip"),
+            ("Latest Bank Statement", "latest_bank_statement"),
+            ("Highest Education Proof", "highest_education_proof")
         ]
-        
-        document_requirements = settings_data.get("document_requirements", {})
+
+        document_requirements = settings_data.get("documents", {})
         document_states = []
-        for doc in frontend_documents:
-            document_states.append(document_requirements.get(doc, False))
+        for display_name, key in frontend_documents:
+            document_states.append(document_requirements.get(key, False))
+
+        # For compatibility, return human-readable list of document names (same as before)
+        frontend_document_names = [d[0] for d in frontend_documents]
         
         return {
             "success": True,
             "settings": {
                 "id": settings_data["id"],
                 "business_id": settings_data["business_id"],
-                "documents": frontend_documents,
+                "documents": frontend_document_names,
                 "document_states": document_states,
                 "field_requirements": settings_data.get("field_requirements", {}),
                 "form_expiry_days": settings_data["form_expiry_days"],

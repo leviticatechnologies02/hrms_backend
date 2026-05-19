@@ -388,18 +388,13 @@ class BulkOnboardingResponse(BaseModel):
 
 # Settings schemas
 class OnboardingSettingsUpdate(BaseModel):
-    form_expiry_days: Optional[int] = Field(None, ge=1, le=365, description="Form expiry in days (1-365)")
-    allow_form_editing: Optional[bool] = Field(None, description="Allow candidates to edit submitted forms")
-    require_document_upload: Optional[bool] = Field(None, description="Require document uploads")
-    send_welcome_email: Optional[bool] = Field(None, description="Send welcome email to candidates")
-    send_reminder_emails: Optional[bool] = Field(None, description="Send reminder emails")
-    reminder_frequency_days: Optional[int] = Field(None, ge=1, le=30, description="Reminder frequency in days (1-30)")
-    default_verify_mobile: Optional[bool] = Field(None, description="Default mobile verification setting")
-    default_verify_pan: Optional[bool] = Field(None, description="Default PAN verification setting")
-    default_verify_bank: Optional[bool] = Field(None, description="Default bank verification setting")
-    default_verify_aadhaar: Optional[bool] = Field(None, description="Default Aadhaar verification setting")
-    enable_auto_approval: Optional[bool] = Field(None, description="Enable automatic approval")
-    auto_approval_criteria: Optional[str] = Field(None, max_length=1000, description="Auto approval criteria (JSON)")
+    fields: Dict[str, bool]
+    documents: Dict[str, bool]
+
+    form_expiry_days: int
+    send_welcome_email: bool
+    send_reminder_emails: bool
+    default_verify_mobile: bool
 
 
 # Diagnostic/debug response schema
@@ -437,9 +432,9 @@ class DebugEnvironmentResponse(BaseModel):
     def validate_document_requirements(cls, v):
         if v is not None:
             valid_documents = [
-                "PAN Card", "Adhar Card", "ESI Card", "Driving License", "Passport",
-                "Voter ID", "Last Relieving Letter", "Last Salary Slip", 
-                "Latest Bank Statement", "Highest Education Proof"
+                "pan_card", "adhar_card", "esi_card", "driving_license", "passport",
+                "voter_id", "last_relieving_letter", "last_salary_slip",
+                "latest_bank_statement", "highest_education_proof"
             ]
             for doc_name in v.keys():
                 if doc_name not in valid_documents:
@@ -449,7 +444,7 @@ class DebugEnvironmentResponse(BaseModel):
     @validator('field_requirements')
     def validate_field_requirements(cls, v):
         if v is not None:
-            valid_fields = ["presentAddress", "permanentAddress", "bankDetails"]
+            valid_fields = ["present_address", "permanent_address", "bank_details"]
             for field_name in v.keys():
                 if field_name not in valid_fields:
                     raise ValueError(f"Invalid field type: {field_name}")
@@ -462,7 +457,7 @@ class OnboardingSettingsResponse(OnboardingSettingsUpdate):
     created_at: datetime
     updated_at: Optional[datetime] = None
     created_by: Optional[int] = None
-    
+
     class Config:
         from_attributes = True
 

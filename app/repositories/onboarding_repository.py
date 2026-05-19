@@ -225,22 +225,22 @@ class OnboardingSettingsRepository(BaseRepository[OnboardingSettings]):
         import json
         
         default_document_requirements = {
-            "PAN Card": True,
-            "Adhar Card": True,
-            "ESI Card": False,
-            "Driving License": False,
-            "Passport": False,
-            "Voter ID": False,
-            "Last Relieving Letter": False,
-            "Last Salary Slip": False,
-            "Latest Bank Statement": False,
-            "Highest Education Proof": True
+            "pan_card": True,
+            "adhar_card": True,
+            "esi_card": False,
+            "driving_license": False,
+            "passport": False,
+            "voter_id": False,
+            "last_relieving_letter": False,
+            "last_salary_slip": False,
+            "latest_bank_statement": False,
+            "highest_education_proof": True
         }
         
         default_field_requirements = {
-            "presentAddress": True,
-            "permanentAddress": True,
-            "bankDetails": True
+            "present_address": True,
+            "permanent_address": True,
+            "bank_details": True
         }
         
         settings = OnboardingSettings(

@@ -679,7 +679,7 @@ async def create_onboarding_form(
 
 
 
-@router.get("/forms/{form_id}", response_model=OnboardingFormResponse)
+@router.get("/forms/{form_id:int}", response_model=OnboardingFormResponse)
 async def get_onboarding_form(
     business_id: int = Path(...),
     form_id: int = Path(...),
@@ -2161,7 +2161,7 @@ async def get_credit_pricing(
 # ---------------------------------------------------------------------------
 # Get form by id
 # ---------------------------------------------------------------------------
-@router.get("/forms/{form_id}", response_model=OnboardingFormResponse)
+@router.get("/forms/{form_id:int}", response_model=OnboardingFormResponse)
 async def get_onboarding_form(
     business_id: int = Path(..., description="Business ID"),
     form_id: int = Path(..., description="Form ID"),

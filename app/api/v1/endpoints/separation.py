@@ -10,8 +10,7 @@ from typing import List, Optional, Dict, Any
 from datetime import datetime, date, timedelta
 
 from app.core.database import get_db
-from app.api.v1.deps import get_current_admin
-from app.api.v1.endpoints.master_setup import get_user_business_id
+from app.api.v1.deps import get_current_admin, validate_business_access
 from app.models.user import User
 from app.models.employee import Employee
 from app.models.separation import SeparationRequest, SeparationType, SeparationStatus, SeparationClearance, ClearanceStatus, RehireRequest, RehireOfferStatus
@@ -25,7 +24,9 @@ from app.schemas.separation import (
 )
 from app.services.separation_service import SeparationService
 
-router = APIRouter()
+router = APIRouter(
+    tags=['Separation']
+)
 
 
 # ============================================================================
@@ -34,22 +35,18 @@ router = APIRouter()
 
 @router.get("/exit-reasons")
 async def get_exit_reasons(
+    business_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
     """Get list of exit reasons for dropdown from database"""
     try:
         from app.models.exit_reason import ExitReason
-        
-        business_id = get_user_business_id(current_user, db)
-        is_superadmin = current_user.role == "superadmin"
-        
-        # Get exit reasons from database
-        query = db.query(ExitReason)
-        
-        # Apply business filter only for non-superadmin users
-        if not is_superadmin and business_id:
-            query = query.filter(ExitReason.business_id == business_id)
+
+        validate_business_access(business_id, current_user, db)
+
+        # Get exit reasons for this business
+        query = db.query(ExitReason).filter(ExitReason.business_id == business_id)
         
         exit_reasons = query.all()
         
@@ -89,16 +86,16 @@ async def get_exit_reasons(
 
 @router.get("/employees/search")
 async def search_employees_for_separation(
+    business_id: int,
     q: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
     """Search for active employees for separation initiation"""
     try:
-        business_id = get_user_business_id(current_user, db)
-        is_superadmin = current_user.role == "superadmin"
-        
-        # Search for active employees
+        validate_business_access(business_id, current_user, db)
+
+        # Search for active employees within the business
         search_term = f"%{q}%"
         query = db.query(Employee).filter(
             or_(
@@ -106,14 +103,11 @@ async def search_employees_for_separation(
                 Employee.last_name.ilike(search_term),
                 Employee.employee_code.ilike(search_term)
             ),
-            Employee.is_active == True
+            Employee.is_active == True,
+            Employee.business_id == business_id
         )
-        
-        # Apply business filter only for non-superadmin users
-        if not is_superadmin and business_id:
-            query = query.filter(Employee.business_id == business_id)
-        
-        employees = query.limit(50).all()  # Increased limit for superadmin
+
+        employees = query.limit(50).all()
         
         result = []
         for emp in employees:
@@ -121,6 +115,7 @@ async def search_employees_for_separation(
             has_pending = db.query(SeparationRequest).filter(
                 and_(
                     SeparationRequest.employee_id == emp.id,
+                    SeparationRequest.business_id == business_id,
                     SeparationRequest.status.in_([
                         SeparationStatus.INITIATED,
                         SeparationStatus.PENDING_APPROVAL,
@@ -156,24 +151,21 @@ async def search_employees_for_separation(
 
 @router.get("/employees/{employee_id}/details")
 async def get_employee_details_for_separation(
+    business_id: int,
     employee_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
     """Get employee details for separation form"""
     try:
-        business_id = get_user_business_id(current_user, db)
-        is_superadmin = current_user.role == "superadmin"
-        
+        validate_business_access(business_id, current_user, db)
+
         query = db.query(Employee).filter(
             Employee.id == employee_id,
-            Employee.is_active == True
+            Employee.is_active == True,
+            Employee.business_id == business_id
         )
-        
-        # Apply business filter only for non-superadmin users
-        if not is_superadmin and business_id:
-            query = query.filter(Employee.business_id == business_id)
-        
+
         employee = query.first()
         
         if not employee:
@@ -186,6 +178,7 @@ async def get_employee_details_for_separation(
         has_pending = db.query(SeparationRequest).filter(
             and_(
                 SeparationRequest.employee_id == employee_id,
+                SeparationRequest.business_id == business_id,
                 SeparationRequest.status.in_([
                     SeparationStatus.INITIATED,
                     SeparationStatus.PENDING_APPROVAL,
@@ -221,6 +214,7 @@ async def get_employee_details_for_separation(
 
 @router.post("/initiate", response_model=SeparationRequestResponse)
 async def initiate_separation(
+    business_id: int,
     separation_request: SeparationRequestCreate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
@@ -260,8 +254,8 @@ async def initiate_separation(
     - Timestamps and status
     """
     try:
-        business_id = get_user_business_id(current_user, db)
-        
+        validate_business_access(business_id, current_user, db)
+
         # Initialize separation service
         separation_service = SeparationService(db)
         
@@ -283,39 +277,36 @@ async def initiate_separation(
         )
 
 
-@router.get("/pending/frontend-format")
-async def get_pending_separations_frontend_format(
+@router.get("/pending")
+async def get_pending_separations(
+    business_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
     """Get pending separations in frontend table format"""
     try:
-        business_id = get_user_business_id(current_user, db)
-        is_superadmin = current_user.role == "superadmin"
-        
-        # Get pending separations
+        validate_business_access(business_id, current_user, db)
+
+        # Get pending separations for this business
         pending_statuses = [
             SeparationStatus.INITIATED,
             SeparationStatus.PENDING_APPROVAL,
             SeparationStatus.IN_PROGRESS,
             SeparationStatus.APPROVED
         ]
-        
+
         query = db.query(SeparationRequest).filter(
-            SeparationRequest.status.in_(pending_statuses)
+            SeparationRequest.status.in_(pending_statuses),
+            SeparationRequest.business_id == business_id
         )
-        
-        # Apply business filter only for non-superadmin users
-        if not is_superadmin and business_id:
-            query = query.filter(SeparationRequest.business_id == business_id)
-        
+
         separations = query.order_by(desc(SeparationRequest.created_at)).all()
         
         # Format for frontend table
         formatted_separations = []
         for sep in separations:
-            # Get employee details
-            employee = db.query(Employee).filter(Employee.id == sep.employee_id).first()
+            # Get employee details scoped to business
+            employee = db.query(Employee).filter(Employee.id == sep.employee_id, Employee.business_id == business_id).first()
             
             if employee:
                 formatted_separations.append({
@@ -368,33 +359,30 @@ async def get_pending_separations_frontend_format(
         )
 
 
-@router.get("/ex-employees/frontend-format")
-async def get_ex_employees_frontend_format(
+@router.get("/ex-employees")
+async def get_ex_employees(
+    business_id: int,
     page: int = 1,
-    size: int = 200,  # Increased for superadmin
+    size: int = 200,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
     """Get ex-employees in frontend table format"""
     try:
-        business_id = get_user_business_id(current_user, db)
-        is_superadmin = current_user.role == "superadmin"
-        
-        # Get ex-employees (completed separations)
+        validate_business_access(business_id, current_user, db)
+
+        # Get ex-employees (completed separations) for this business
         query = db.query(SeparationRequest).filter(
-            SeparationRequest.status == SeparationStatus.COMPLETED
+            SeparationRequest.status == SeparationStatus.COMPLETED,
+            SeparationRequest.business_id == business_id
         )
-        
-        # Apply business filter only for non-superadmin users
-        if not is_superadmin and business_id:
-            query = query.filter(SeparationRequest.business_id == business_id)
-        
+
         separations = query.order_by(desc(SeparationRequest.completed_at)).all()
         
         # Format for frontend table - Frontend expects flat structure
         formatted_employees = []
         for sep in separations:
-            employee = db.query(Employee).filter(Employee.id == sep.employee_id).first()
+            employee = db.query(Employee).filter(Employee.id == sep.employee_id, Employee.business_id == business_id).first()
             
             if employee:
                 formatted_employees.append({
@@ -453,6 +441,7 @@ async def get_ex_employees_frontend_format(
 
 @router.post("/{separation_id}/approve", response_model=SeparationActionResponse)
 async def approve_separation(
+    business_id: int,
     separation_id: int,
     approval_request: SeparationApprovalRequest,
     db: Session = Depends(get_db),
@@ -495,8 +484,8 @@ async def approve_separation(
     - Timestamp and action details
     """
     try:
-        business_id = get_user_business_id(current_user, db)
-        
+        validate_business_access(business_id, current_user, db)
+
         # Initialize separation service
         separation_service = SeparationService(db)
         
@@ -588,6 +577,7 @@ async def approve_separation(
 
 @router.post("/{separation_id}/reject", response_model=SeparationActionResponse)
 async def reject_separation(
+    business_id: int,
     separation_id: int,
     rejection_request: SeparationRejectionRequest,
     db: Session = Depends(get_db),
@@ -624,8 +614,8 @@ async def reject_separation(
     - Timestamp and action details
     """
     try:
-        business_id = get_user_business_id(current_user, db)
-        
+        validate_business_access(business_id, current_user, db)
+
         # Initialize separation service
         separation_service = SeparationService(db)
         
@@ -675,25 +665,22 @@ async def reject_separation(
 
 @router.get("/ex-employees/{employee_id}/details")
 async def get_ex_employee_details(
+    business_id: int,
     employee_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
     """Get detailed information about an ex-employee"""
     try:
-        business_id = get_user_business_id(current_user, db)
-        is_superadmin = current_user.role == "superadmin"
-        
-        # Find the completed separation for this employee
+        validate_business_access(business_id, current_user, db)
+
+        # Find the completed separation for this employee in this business
         query = db.query(SeparationRequest).filter(
             SeparationRequest.employee_id == employee_id,
-            SeparationRequest.status == SeparationStatus.COMPLETED
+            SeparationRequest.status == SeparationStatus.COMPLETED,
+            SeparationRequest.business_id == business_id
         )
-        
-        # Apply business filter only for non-superadmin users
-        if not is_superadmin and business_id:
-            query = query.filter(SeparationRequest.business_id == business_id)
-        
+
         separation = query.first()
         
         if not separation:
@@ -702,8 +689,8 @@ async def get_ex_employee_details(
                 detail="Ex-employee record not found"
             )
         
-        # Get employee details
-        employee = db.query(Employee).filter(Employee.id == employee_id).first()
+        # Get employee details scoped to this business
+        employee = db.query(Employee).filter(Employee.id == employee_id, Employee.business_id == business_id).first()
         
         if not employee:
             raise HTTPException(
@@ -750,25 +737,22 @@ async def get_ex_employee_details(
 
 @router.get("/ex-employees/{employee_id}/documents")
 async def get_ex_employee_documents(
+    business_id: int,
     employee_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
     """Get list of documents for an ex-employee"""
     try:
-        business_id = get_user_business_id(current_user, db)
-        is_superadmin = current_user.role == "superadmin"
-        
-        # Find the completed separation for this employee
+        validate_business_access(business_id, current_user, db)
+
+        # Find the completed separation for this employee in this business
         query = db.query(SeparationRequest).filter(
             SeparationRequest.employee_id == employee_id,
-            SeparationRequest.status == SeparationStatus.COMPLETED
+            SeparationRequest.status == SeparationStatus.COMPLETED,
+            SeparationRequest.business_id == business_id
         )
-        
-        # Apply business filter only for non-superadmin users
-        if not is_superadmin and business_id:
-            query = query.filter(SeparationRequest.business_id == business_id)
-        
+
         separation = query.first()
         
         if not separation:
@@ -883,6 +867,7 @@ async def get_ex_employee_documents(
 
 @router.post("/ex-employees/{employee_id}/rehire", response_model=RehireResponse)
 async def rehire_ex_employee(
+    business_id: int,
     employee_id: int,
     rehire_request: RehireRequestCreate,
     db: Session = Depends(get_db),
@@ -936,8 +921,8 @@ async def rehire_ex_employee(
     - Employee and position information
     """
     try:
-        business_id = get_user_business_id(current_user, db)
-        
+        validate_business_access(business_id, current_user, db)
+
         # Find the completed separation for this employee
         separation = db.query(SeparationRequest).filter(
             SeparationRequest.employee_id == employee_id,
@@ -951,8 +936,8 @@ async def rehire_ex_employee(
                 detail="Ex-employee record not found or separation not completed"
             )
         
-        # Get employee details
-        employee = db.query(Employee).filter(Employee.id == employee_id).first()
+        # Get employee details scoped to business
+        employee = db.query(Employee).filter(Employee.id == employee_id, Employee.business_id == business_id).first()
         
         if not employee:
             raise HTTPException(
@@ -1091,16 +1076,16 @@ async def rehire_ex_employee(
 
 @router.get("/pending/{separation_id}/details")
 async def get_pending_separation_details(
+    business_id: int,
     separation_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
     """Get detailed information about a pending separation request"""
     try:
-        business_id = get_user_business_id(current_user, db)
-        is_superadmin = current_user.role == "superadmin"
-        
-        # Find the separation request
+        validate_business_access(business_id, current_user, db)
+
+        # Find the separation request for this business
         query = db.query(SeparationRequest).filter(
             SeparationRequest.id == separation_id,
             SeparationRequest.status.in_([
@@ -1108,13 +1093,10 @@ async def get_pending_separation_details(
                 SeparationStatus.PENDING_APPROVAL,
                 SeparationStatus.IN_PROGRESS,
                 SeparationStatus.APPROVED
-            ])
+            ]),
+            SeparationRequest.business_id == business_id
         )
-        
-        # Apply business filter only for non-superadmin users
-        if not is_superadmin and business_id:
-            query = query.filter(SeparationRequest.business_id == business_id)
-        
+
         separation = query.first()
         
         if not separation:
@@ -1123,8 +1105,8 @@ async def get_pending_separation_details(
                 detail="Pending separation request not found"
             )
         
-        # Get employee details
-        employee = db.query(Employee).filter(Employee.id == separation.employee_id).first()
+        # Get employee details scoped to business
+        employee = db.query(Employee).filter(Employee.id == separation.employee_id, Employee.business_id == business_id).first()
         
         if not employee:
             raise HTTPException(

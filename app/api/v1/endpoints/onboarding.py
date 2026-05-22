@@ -703,7 +703,7 @@ async def list_onboarding_forms(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-@router.post("/", response_model=OnboardingResponseSchema)
+@router.post("/{form_id}/create", response_model=OnboardingResponseSchema)
 async def create_onboarding_form(
     business_id: int = Path(...),
     form_data: CreateOnboardingSchema = None,
@@ -1963,23 +1963,6 @@ async def list_onboarding_forms(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-# ---------------------------------------------------------------------------
-# Create form
-# ---------------------------------------------------------------------------
-@router.post("/", response_model=OnboardingResponseSchema)
-async def create_onboarding_form(
-    business_id: int = Path(..., description="Business ID"),
-    form_data: CreateOnboardingSchema = None,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_admin)
-):
-    try:
-        validate_business_access(business_id, current_user, db)
-        service = OnboardingService(db)
-        form = service.create_onboarding_form(form_data, business_id, current_user.id)
-        return form
-    except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
 # ---------------------------------------------------------------------------

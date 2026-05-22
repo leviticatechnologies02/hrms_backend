@@ -58,6 +58,25 @@ class OnboardingFormBase(BaseModel):
 
 
 # Nested explicit schemas to ensure Swagger shows concrete fields
+# Minimal/allow-extra nested schemas for create payloads
+class PoliciesCreateSchema(BaseModel):
+    """Minimal policies object for onboarding creation payloads."""
+    class Config:
+        extra = "allow"
+
+
+class OfferLetterCreateMinimal(BaseModel):
+    """Offer letter object for create payloads without detailed fields."""
+    class Config:
+        extra = "allow"
+
+
+class SalaryOptionsCreateMinimal(BaseModel):
+    """Salary options for create payloads without detailed breakdowns."""
+    class Config:
+        extra = "allow"
+
+
 class CreateOnboardingSchema(BaseModel):
     candidate_name: str = Field(..., min_length=2, max_length=255)
     candidate_email: EmailStr
@@ -101,7 +120,34 @@ class OnboardingResponseSchema(CreateOnboardingSchema):
     offer_letter: Optional[OfferLetterSchema] = None
     salary_options: Optional[SalaryOptionsSchema] = None
 
-    model_config = {"from_attributes": True}
+    class Config:
+        from_attributes = True
+        json_schema_extra = {
+            "example": {
+                "candidate_name": "string",
+                "candidate_email": "user@example.com",
+                "candidate_mobile": "stringstri",
+                "verify_mobile": True,
+                "verify_pan": False,
+                "verify_bank": False,
+                "verify_aadhaar": False,
+                "notes": "string",
+                "policies": { },
+                "offer_letter": { },
+                "salary_options": { },
+                "id": 0,
+                "business_id": 0,
+                "form_token": "string",
+                "status": "string",
+                "created_at": "2026-05-19T17:08:09.875Z",
+                "sent_at": "2026-05-19T17:08:09.875Z",
+                "submitted_at": "2026-05-19T17:08:09.875Z",
+                "approved_at": "2026-05-19T17:08:09.875Z",
+                "rejected_at": "2026-05-19T17:08:09.875Z",
+                "expires_at": "2026-05-19T17:08:09.875Z",
+                "rejection_reason": "string"
+            }
+        }
 
 
 class OnboardingListResponse(BaseModel):

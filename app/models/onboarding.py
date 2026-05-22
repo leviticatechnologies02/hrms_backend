@@ -90,7 +90,9 @@ class OnboardingForm(Base):
     # Related records
     documents = relationship("OnboardingDocument", back_populates="form")
     policy_records = relationship("OnboardingPolicy", back_populates="form")
-    form_policy_mappings = relationship("FormPolicyMapping", back_populates="form")
+    # Mapping to master policies via join table
+    # Use simple class-name string so SQLAlchemy can resolve after all models are imported
+    form_policy_mappings = relationship("FormPolicyMapping", back_populates="form", cascade="all, delete-orphan")
     offer_letters = relationship("OfferLetter", back_populates="form")
     submissions = relationship("FormSubmission", back_populates="form")
 

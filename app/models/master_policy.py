@@ -23,7 +23,8 @@ class MasterPolicy(Base):
     created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
 
     # Relationship to form-policy mappings
-    form_policy_mappings = relationship("FormPolicyMapping", back_populates="policy")
+    # Use simple class name string so SQLAlchemy resolves it after all models are imported.
+    form_policy_mappings = relationship("FormPolicyMapping", back_populates="policy", cascade="all, delete-orphan")
 
     def to_dict(self):
         return {
@@ -49,6 +50,7 @@ class FormPolicyMapping(Base):
     created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
 
     # Relationships
+    # Refer to related models by class name strings to avoid import-order issues.
     form = relationship("OnboardingForm", back_populates="form_policy_mappings")
     policy = relationship("MasterPolicy", back_populates="form_policy_mappings")
 

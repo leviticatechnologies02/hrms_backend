@@ -401,6 +401,34 @@ class VisitTypeCreate(VisitTypeBase):
     pass
 
 
+# ============================================================================
+# Master Policy Schemas
+# ============================================================================
+
+
+class MasterPolicyCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+    type: Optional[str] = None
+    is_mandatory: Optional[bool] = False
+    requires_acknowledgment: Optional[bool] = False
+    file_path: Optional[str] = None
+
+
+class MasterPolicyResponse(BaseModel):
+    id: int
+    business_id: int
+    name: str
+    description: Optional[str] = None
+    type: Optional[str] = None
+    is_mandatory: bool = False
+    requires_acknowledgment: bool = False
+    file_path: Optional[str] = None
+    created_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class VisitTypeUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=255)
 

@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field, EmailStr
 from typing import List, Optional, Dict, Any
 from datetime import date, datetime
 from decimal import Decimal
+from app.schemas.master_setup import MasterPolicyResponse
 
 
 class SalaryCalculationRequest(BaseModel):
@@ -181,6 +182,23 @@ class PolicyAttachmentRequest(BaseModel):
         json_schema_extra = {
             "example": {
                 "policy_ids": [1, 2, 3, 5, 6]
+            }
+        }
+
+
+class AttachPoliciesResponse(BaseModel):
+    success: bool = True
+    message: str
+    form_id: int
+    attached_policies: List[MasterPolicyResponse]
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "success": True,
+                "message": "Successfully attached policies to form",
+                "form_id": 1,
+                "attached_policies": []
             }
         }
 

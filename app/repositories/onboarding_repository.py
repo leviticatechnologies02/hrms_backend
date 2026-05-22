@@ -4,7 +4,7 @@ Data access layer for onboarding operations following repository pattern
 """
 
 from typing import List, Optional, Dict, Any
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import and_, or_, desc, func
 from datetime import datetime, timedelta
 
@@ -24,7 +24,7 @@ class OnboardingRepository(BaseRepository[OnboardingForm]):
     
     def get_by_business_id(self, business_id: int, skip: int = 0, limit: int = 100) -> List[OnboardingForm]:
         """Get onboarding forms by business ID"""
-        return self.db.query(OnboardingForm).filter(
+        return self.db.query(OnboardingForm).options(joinedload(OnboardingForm.form_policy_mappings)).filter(
             and_(
                 OnboardingForm.business_id == business_id,
                 OnboardingForm.is_active == True

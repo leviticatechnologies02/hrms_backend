@@ -100,7 +100,7 @@ def create_component(
     - **name**: Full name of the component
     - **alias**: Short name/code for the component
     - **component_type**: Type of component (Fixed/Variable/Deduction)
-    - **unit_type**: Calculation unit (Paid Days/Casual Days)
+    - **unit_type**: Calculation unit (Paid Days/Fixed/Monthly)
     """
     if business_id <= 0:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid business ID")

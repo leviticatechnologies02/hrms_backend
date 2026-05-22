@@ -23,6 +23,7 @@ from app.models.onboarding import (
     OnboardingForm, OfferLetter, OfferLetterTemplate, OnboardingStatus, OnboardingSettings,
     BulkOnboarding, FormSubmission, OnboardingPolicy
 )
+from app.models.master_policy import MasterPolicy, FormPolicyMapping
 from app.schemas.onboarding import (
     OnboardingResponseSchema, CreateOnboardingSchema, UpdateOnboardingSchema,
     OfferLetterCreate, OfferLetterResponse,
@@ -39,7 +40,7 @@ from app.schemas.onboarding_additional import (
     DocumentRequirementUpdateRequest, FieldRequirementUpdateRequest,
     BulkSendRequest, SendFormRequest, StepDataRequest,
     OTPSendRequest, OTPVerifyRequest, DocumentUploadRequest,
-    FormCreateRequest, FinalizeAndSendRequest
+    FormCreateRequest, FinalizeAndSendRequest, AttachPoliciesResponse
 )
 from app.schemas.credits import CreditPurchaseRequest
 from app.services.onboarding_service import OnboardingService
@@ -179,7 +180,7 @@ async def get_employee_profile_for_offer_letter(
             "candidate_mobile": form.candidate_mobile,
             "offer_letter": None,
             "salary_options": None,
-            "policies": None
+            "policies": []
         }
 
         # Try to populate offer_letter/salary_options/policies from form properties (may be None)
@@ -194,9 +195,9 @@ async def get_employee_profile_for_offer_letter(
             employee_profile["salary_options"] = None
 
         try:
-            employee_profile["policies"] = form.policies if getattr(form, 'policies', None) is not None else None
+            employee_profile["policies"] = form.policies if getattr(form, 'policies', None) is not None else []
         except Exception:
-            employee_profile["policies"] = None
+            employee_profile["policies"] = []
 
         # If the form has an associated offer_letter record(s), prefer the first record for nested fields
         if form.offer_letters and len(form.offer_letters) > 0:
@@ -516,7 +517,7 @@ async def get_policy_templates(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-@router.post("/{form_id}/attach-policies", response_model=dict)
+@router.post("/{form_id}/attach-policies", response_model=AttachPoliciesResponse)
 async def attach_policies_to_form(
     business_id: int = Path(...),
     form_id: int = Path(...),
@@ -528,21 +529,43 @@ async def attach_policies_to_form(
     try:
         form = validate_form_access(db, form_id, business_id, current_user)
         selected_policy_ids = policy_data.policy_ids or []
-        # Clear existing policies for this form (scoped if DB supports business_id)
+        # Validate requested master policies belong to this business
+        if not selected_policy_ids:
+            return {"success": True, "message": "No policies provided", "form_id": form_id, "attached_policies": []}
+
+        masters = db.query(MasterPolicy).filter(MasterPolicy.id.in_(selected_policy_ids), MasterPolicy.business_id == business_id).all()
+        found_ids = {m.id for m in masters}
+        missing = [pid for pid in selected_policy_ids if pid not in found_ids]
+        if missing:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Master policies not found or not owned by business: {missing}")
+
+        # Remove existing onboarding policy records for this form (scoped)
         if table_has_column(db, 'onboarding_policies', 'business_id'):
             db.query(OnboardingPolicy).filter(OnboardingPolicy.form_id == form_id, OnboardingPolicy.business_id == business_id).delete()
         else:
             db.query(OnboardingPolicy).filter(OnboardingPolicy.form_id == form_id).delete()
 
-        # Add new policies
-        for i, policy_id in enumerate(selected_policy_ids):
+        # Remove existing form-policy mappings for this form
+        if table_has_column(db, 'form_policy_mapping', 'business_id'):
+            db.query(FormPolicyMapping).filter(FormPolicyMapping.form_id == form_id, FormPolicyMapping.business_id == business_id).delete()
+        else:
+            db.query(FormPolicyMapping).filter(FormPolicyMapping.form_id == form_id).delete()
+
+        # Preserve order as sent by client
+        attached_masters = []
+        for i, pid in enumerate(selected_policy_ids):
+            master = next((m for m in masters if m.id == pid), None)
+            if not master:
+                continue
+
+            # Create onboarding policy record for backward compatibility
             policy_kwargs = dict(
                 form_id=form_id,
-                policy_name=f"Policy {policy_id}",
-                policy_content=f"Policy content for {policy_id}",
-                policy_file_path=f"/policies/{policy_id}.pdf",
-                requires_acknowledgment=True,
-                is_mandatory=True,
+                policy_name=master.name or f"Policy {pid}",
+                policy_content=master.description,
+                policy_file_path=master.file_path,
+                requires_acknowledgment=bool(master.requires_acknowledgment),
+                is_mandatory=bool(master.is_mandatory),
                 display_order=i,
                 created_by=current_user.id
             )
@@ -550,8 +573,27 @@ async def attach_policies_to_form(
                 policy_kwargs['business_id'] = business_id
             policy = OnboardingPolicy(**policy_kwargs)
             db.add(policy)
+
+            # Create mapping entry
+            mapping_kwargs = dict(
+                form_id=form_id,
+                policy_id=master.id,
+                business_id=business_id,
+                created_by=current_user.id
+            )
+            mapping = FormPolicyMapping(**mapping_kwargs)
+            db.add(mapping)
+
+            attached_masters.append(master)
+
         db.commit()
-        return {"success": True, "attached_policies": len(selected_policy_ids), "form_id": form_id}
+
+        return {
+            "success": True,
+            "message": "Successfully attached policies to form",
+            "form_id": form_id,
+            "attached_policies": attached_masters
+        }
     except HTTPException:
         raise
     except Exception as e:
@@ -1709,7 +1751,7 @@ async def get_policy_templates(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-@router.post("/{form_id}/attach-policies", response_model=dict)
+@router.post("/{form_id}/attach-policies", response_model=AttachPoliciesResponse)
 async def attach_policies_to_form(
     business_id: int = Path(..., description="Business ID"),
     form_id: int = Path(..., description="Form ID"),
@@ -1723,35 +1765,65 @@ async def attach_policies_to_form(
 
         selected_policy_ids = policy_data.policy_ids if policy_data else []
 
-        db.query(OnboardingPolicy).filter(OnboardingPolicy.form_id == form_id, OnboardingPolicy.business_id == business_id).delete()
+        if not selected_policy_ids:
+            return {"success": True, "message": "No policies provided", "form_id": form_id, "attached_policies": []}
 
-        policy_templates = [
-            {"id": 1, "name": "Employee Handbook", "type": "handbook"},
-            {"id": 2, "name": "Code of Conduct", "type": "conduct"},
-            {"id": 3, "name": "IT Security Policy", "type": "it_security"},
-            {"id": 4, "name": "Remote Work Policy", "type": "remote_work"},
-            {"id": 5, "name": "Leave Policy", "type": "leave"},
-            {"id": 6, "name": "Health & Safety Policy", "type": "health_safety"}
-        ]
+        # Fetch master policies and validate ownership
+        masters = db.query(MasterPolicy).filter(MasterPolicy.id.in_(selected_policy_ids), MasterPolicy.business_id == business_id).all()
+        found_ids = {m.id for m in masters}
+        missing = [pid for pid in selected_policy_ids if pid not in found_ids]
+        if missing:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Master policies not found or not owned by business: {missing}")
 
+        # Clear existing onboarding policies and mappings for this form
+        if table_has_column(db, 'onboarding_policies', 'business_id'):
+            db.query(OnboardingPolicy).filter(OnboardingPolicy.form_id == form_id, OnboardingPolicy.business_id == business_id).delete()
+        else:
+            db.query(OnboardingPolicy).filter(OnboardingPolicy.form_id == form_id).delete()
+
+        if table_has_column(db, 'form_policy_mapping', 'business_id'):
+            db.query(FormPolicyMapping).filter(FormPolicyMapping.form_id == form_id, FormPolicyMapping.business_id == business_id).delete()
+        else:
+            db.query(FormPolicyMapping).filter(FormPolicyMapping.form_id == form_id).delete()
+
+        attached_masters = []
         for i, pid in enumerate(selected_policy_ids):
-            p = next((t for t in policy_templates if t["id"] == pid), None)
-            if p:
-                policy = OnboardingPolicy(
-                    business_id=business_id,
-                    form_id=form_id,
-                    policy_name=p["name"],
-                    policy_content=f"Policy content for {p['name']}",
-                    policy_file_path=f"/policies/{p['type']}.pdf",
-                    requires_acknowledgment=True,
-                    is_mandatory=pid in [1,2,3,5,6],
-                    display_order=i,
-                    created_by=current_user.id
-                )
-                db.add(policy)
+            master = next((m for m in masters if m.id == pid), None)
+            if not master:
+                continue
+
+            policy_kwargs = dict(
+                form_id=form_id,
+                policy_name=master.name or f"Policy {pid}",
+                policy_content=master.description,
+                policy_file_path=master.file_path,
+                requires_acknowledgment=bool(master.requires_acknowledgment),
+                is_mandatory=bool(master.is_mandatory),
+                display_order=i,
+                created_by=current_user.id
+            )
+            if table_has_column(db, 'onboarding_policies', 'business_id'):
+                policy_kwargs['business_id'] = business_id
+            db.add(OnboardingPolicy(**policy_kwargs))
+
+            mapping = FormPolicyMapping(
+                form_id=form_id,
+                policy_id=master.id,
+                business_id=business_id,
+                created_by=current_user.id
+            )
+            db.add(mapping)
+
+            attached_masters.append(master)
 
         db.commit()
-        return {"success": True, "message": f"Successfully attached {len(selected_policy_ids)} policies to form", "form_id": form_id, "attached_policies": len(selected_policy_ids)}
+
+        return {
+            "success": True,
+            "message": "Successfully attached policies to form",
+            "form_id": form_id,
+            "attached_policies": attached_masters
+        }
     except HTTPException:
         raise
     except Exception as e:

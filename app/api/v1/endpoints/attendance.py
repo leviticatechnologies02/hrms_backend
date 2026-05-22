@@ -8,7 +8,7 @@ Complete attendance management API
     - The duplicates in this file should be removed in future cleanup
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Body, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, status, Path, Query, Body, UploadFile, File, Form
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func, and_, or_, desc, asc
 from typing import List, Optional, Dict, Any
@@ -66,14 +66,14 @@ from app.schemas.attendance_additional import (
 )
 
 logger = logging.getLogger(__name__)
-router = APIRouter()
+router = APIRouter(tags=["Attendance"])
 
 
 # ============================================================================
 # HELPER FUNCTIONS FOR BUSINESS ISOLATION
 # ============================================================================
 
-def validate_employee_access(db: Session, employee_id: int, current_user: User) -> Employee:
+def validate_employee_access(db: Session, employee_id: int, current_user: User, business_id: Optional[int] = None) -> Employee:
     """
     Validate that the employee belongs to one of the user's businesses.
     
@@ -88,9 +88,10 @@ def validate_employee_access(db: Session, employee_id: int, current_user: User) 
     Raises:
         HTTPException 404: If employee not found or not accessible
     """
-    # Get user's business ID
-    business_id = get_user_business_id(current_user, db)
-    
+    # Determine business_id: prefer provided path param, fallback to user's business
+    if business_id is None:
+        business_id = get_user_business_id(current_user, db)
+
     # Query employee with business_id filter
     employee = db.query(Employee).filter(
         Employee.id == employee_id,
@@ -106,12 +107,35 @@ def validate_employee_access(db: Session, employee_id: int, current_user: User) 
     return employee
 
 
+# Centralized business access validation (mirrors allemployees pattern)
+def validate_business_access(business_id: int, current_user: User, db: Session):
+    from app.models.business import Business
+
+    business = db.query(Business).filter(Business.id == business_id).first()
+    if not business:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Business with ID {business_id} not found"
+        )
+
+    if getattr(business, 'owner_id', None) != current_user.id and not is_superadmin(current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have access to this business"
+        )
+
+    return business
+
+
 # ============================================================================
 # PUBLIC ENDPOINTS (NO AUTHENTICATION REQUIRED)
 # ============================================================================
 
 @router.get("/public/filters")
-async def get_public_attendance_filters(db: Session = Depends(get_db)):
+async def get_public_attendance_filters(
+    business_id: int = Path(..., description="Business ID"),
+    db: Session = Depends(get_db)
+):
     """
     Get filter options for attendance views (public endpoint)
     
@@ -190,6 +214,7 @@ async def get_public_attendance_filters(db: Session = Depends(get_db)):
 
 @router.get("")
 async def get_attendance_dashboard(
+    business_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -206,17 +231,12 @@ async def get_attendance_dashboard(
     try:
         logger.info("Fetching attendance dashboard data")
         
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
-        
-        # Initialize attendance service
+        # Validate business access and initialize attendance service
         attendance_service = AttendanceService(db)
-        
-        # Get dashboard data from database
-        if is_superadmin:
-            # For superadmin, aggregate data from all businesses
-            dashboard_data = attendance_service.get_attendance_dashboard(None)  # None means all businesses
+        if is_superadmin(current_user):
+            dashboard_data = attendance_service.get_attendance_dashboard(None)
         else:
+            validate_business_access(business_id, current_user, db)
             dashboard_data = attendance_service.get_attendance_dashboard(business_id)
         
         return dashboard_data
@@ -247,8 +267,9 @@ async def get_attendance_dashboard(
 # DAILY PUNCH RECORDS
 # ============================================================================
 
-@router.get("/dailypunch")
+@router.get("/daily-punch")
 async def get_daily_punch_records(
+    business_id: int,
     punch_date: Optional[date] = Query(None, description="Date for punch records (YYYY-MM-DD)"),
     department_id: Optional[int] = Query(None, description="Filter by department ID"),
     location_id: Optional[int] = Query(None, description="Filter by location ID"),
@@ -280,8 +301,8 @@ async def get_daily_punch_records(
         
         logger.info(f"Fetching daily punch records for date: {punch_date}")
         
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        # Validate business access (scoped)
+        validate_business_access(business_id, current_user, db)
         
         # Query attendance records with employee details
         query = db.query(
@@ -461,6 +482,7 @@ async def get_daily_punch_records(
 
 @router.get("/daily-attendance")
 async def get_daily_attendance_cards(
+    business_id: int,
     attendance_date: Optional[date] = Query(None, description="Date for attendance (YYYY-MM-DD)"),
     department_id: Optional[int] = Query(None, description="Filter by department ID"),
     location_id: Optional[int] = Query(None, description="Filter by location ID"),
@@ -492,8 +514,8 @@ async def get_daily_attendance_cards(
         
         logger.info(f"Fetching daily attendance for date: {attendance_date}")
         
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        # Validate business access
+        validate_business_access(business_id, current_user, db)
         
         # Query attendance records with employee details
         query = db.query(
@@ -655,8 +677,9 @@ async def get_daily_attendance_cards(
 # MONTHLY ATTENDANCE EMPLOYEE DATA
 # ============================================================================
 
-@router.get("/attendance-employee")
+@router.get("/employees")
 async def get_monthly_attendance_employees(
+    business_id: int,
     month: Optional[int] = Query(None, description="Month (1-12)"),
     year: Optional[int] = Query(None, description="Year"),
     business_unit: Optional[str] = Query(None, description="Business unit filter"),
@@ -685,8 +708,8 @@ async def get_monthly_attendance_employees(
             
         logger.info(f"Fetching monthly attendance employees for {month}/{year}")
         
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        # Validate business access and scope
+        validate_business_access(business_id, current_user, db)
         
         # Query employees with their details
         query = db.query(Employee).filter(Employee.is_active == True)
@@ -903,8 +926,9 @@ async def get_monthly_attendance_employees(
 # EMPLOYEE ATTENDANCE FILTERS
 # ============================================================================
 
-@router.get("/attendance-employee/filters")
+@router.get("/employees/filters")
 async def get_attendance_employee_filters(
+    business_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -920,8 +944,8 @@ async def get_attendance_employee_filters(
     try:
         logger.info("Fetching attendance employee filters from database (authenticated)")
         
-        # Use proper business ID resolution
-        business_id = get_user_business_id(current_user, db)
+        # Validate business access and use scoped business_id
+        validate_business_access(business_id, current_user, db)
         
         # Generate month options for current year and next year
         current_year = date.today().year
@@ -1000,8 +1024,9 @@ async def get_attendance_employee_filters(
 # EMPLOYEE PUNCH DETAILS
 # ============================================================================
 
-@router.get("/attendance-employee/{employee_id}")
+@router.get("/employees/{employee_id}")
 async def get_employee_monthly_attendance(
+    business_id: int,
     employee_id: int,
     month: Optional[str] = Query(None, description="Month in format 'MMM-YYYY' (e.g., 'DEC-2025')"),
     punch_date: Optional[date] = Query(None, description="Date for punch records (YYYY-MM-DD)"),
@@ -1025,8 +1050,9 @@ async def get_employee_monthly_attendance(
     try:
         logger.info(f"Fetching employee attendance for employee {employee_id}")
         
-        # Validate employee access with business isolation
-        employee = validate_employee_access(db, employee_id, current_user)
+        # Validate business and employee access with business isolation
+        validate_business_access(business_id, current_user, db)
+        employee = validate_employee_access(db, employee_id, current_user, business_id)
         
         # Build employee data with proper database relationships - FIXED: All from database
         try:
@@ -1176,8 +1202,9 @@ async def get_employee_monthly_attendance(
 # DAILY PUNCH UPLOAD/DOWNLOAD
 # ============================================================================
 
-@router.post("/dailypunch/upload")
+@router.post("/daily-punch/upload")
 async def upload_daily_punch_csv(
+    business_id: int,
     file: UploadFile = File(...),
     punch_date: Optional[str] = Form(None),
     db: Session = Depends(get_db),
@@ -1235,11 +1262,8 @@ async def upload_daily_punch_csv(
                 detail=f"CSV must have at least 4 columns. Found: {len(headers)} columns"
             )
         
-        # Get business ID
-        business_id = get_user_business_id(current_user, db)
-        if not business_id:
-            first_business = db.query(Employee).first()
-            business_id = first_business.business_id if first_business else 1
+        # Validate business access and use scoped business_id
+        validate_business_access(business_id, current_user, db)
         
         # Parse target date
         target_date = date.today()
@@ -1446,8 +1470,9 @@ async def upload_daily_punch_csv(
         )
 
 
-@router.post("/dailypunch/download")
+@router.post("/daily-punch/download")
 async def download_daily_punch_csv(
+    business_id: int,
     download_data: DailyPunchDownloadRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
@@ -1474,11 +1499,8 @@ async def download_daily_punch_csv(
         
         logger.info(f"Downloading daily punch data for date: {punch_date}")
         
-        # Get business ID
-        business_id = get_user_business_id(current_user, db)
-        if not business_id:
-            first_business = db.query(Employee).first()
-            business_id = first_business.business_id if first_business else 1
+        # Validate business access
+        validate_business_access(business_id, current_user, db)
         
         # Query attendance records with employee details
         query = db.query(
@@ -1550,8 +1572,9 @@ async def download_daily_punch_csv(
 
 
 
-@router.post("/add-punch")
+@router.post("/punches")
 async def add_punch_record(
+    business_id: int,
     punch_data: AddPunchRecordRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
@@ -1579,6 +1602,8 @@ async def add_punch_record(
     """
     try:
         logger.info(f"Adding punch record: {punch_data}")
+        # Validate business access
+        validate_business_access(business_id, current_user, db)
         
         # Return mock success response instead of database operations
         return {
@@ -1602,8 +1627,9 @@ async def add_punch_record(
 # MANUAL ATTENDANCE
 # ============================================================================
 
-@router.get("/manualAttendance", response_model=Dict[str, Any])
+@router.get("/manual-attendance", response_model=Dict[str, Any])
 async def get_manual_attendance_summary(
+    business_id: int,
     month: Optional[str] = Query(None, description="Month in format JUN-2025"),
     department: Optional[str] = Query(None, description="Filter by department name"),
     location: Optional[str] = Query(None, description="Filter by location name"),
@@ -1628,8 +1654,8 @@ async def get_manual_attendance_summary(
     try:
         logger.info(f"Fetching manual attendance summary for month: {month}")
         
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        # Validate business access and scope
+        validate_business_access(business_id, current_user, db)
         
         # Parse month if provided
         year, month_num = None, None
@@ -1808,8 +1834,9 @@ async def get_manual_attendance_summary(
         )
 
 
-@router.post("/manualAttendance", response_model=Dict[str, Any])
+@router.post("/manual-attendance", response_model=Dict[str, Any])
 async def create_manual_attendance(
+    business_id: int,
     manual_data: ManualAttendanceRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
@@ -1828,6 +1855,8 @@ async def create_manual_attendance(
     try:
         logger.info(f"Creating manual attendance: {manual_data.model_dump()}")
         
+        # Validate business access
+        validate_business_access(business_id, current_user, db)
         # Initialize attendance service
         attendance_service = AttendanceService(db)
         
@@ -1876,6 +1905,7 @@ async def create_manual_attendance(
 
 @router.post("/leavecorrection")
 async def create_leave_correction(
+    business_id: int,
     correction_data: LeaveCorrectionCreateRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
@@ -1901,6 +1931,8 @@ async def create_leave_correction(
     """
     try:
         logger.info(f"Creating leave correction: {correction_data}")
+        # Validate business access
+        validate_business_access(business_id, current_user, db)
         
         # Return mock success response instead of database operations
         return {
@@ -1929,6 +1961,7 @@ async def create_leave_correction(
 
 @router.get("/leavecorrection")
 async def get_leave_corrections(
+    business_id: int,
     month: Optional[str] = Query(None, description="Month in format JUN-2025"),
     employee_id: Optional[int] = Query(None, description="Filter by employee"),
     status: Optional[str] = Query(None, description="Filter by status (pending, approved, rejected)"),
@@ -1975,7 +2008,8 @@ async def get_leave_corrections(
             month_num = 6
         
         # ✅ HYBRID BUSINESS UNIT LOGIC
-        business_id = get_user_business_id(current_user, db)
+        # Validate business access (path-scoped)
+        validate_business_access(business_id, current_user, db)
         is_superadmin_user = is_superadmin(current_user)
         
         # Initialize leave balance service
@@ -2268,8 +2302,9 @@ async def get_leave_corrections(
         }
 
 
-@router.post("/shiftroster")
+@router.post("/shift-roster")
 async def create_shift_roster_request(
+    business_id: int,
     request_data: ShiftRosterRequestCreate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
@@ -2294,11 +2329,8 @@ async def create_shift_roster_request(
     try:
         logger.info(f"Creating shift roster request: {request_data}")
         
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
-        if not business_id:
-            first_business = db.query(Employee).first()
-            business_id = first_business.business_id if first_business else 1
+        # Validate business access
+        validate_business_access(business_id, current_user, db)
         
         # Initialize shift roster service
         from app.services.shift_roster_service import ShiftRosterService
@@ -2335,8 +2367,9 @@ async def create_shift_roster_request(
         }
 
 
-@router.put("/shiftroster/{request_id}/approve")
+@router.put("/shift-roster/{request_id}/approve")
 async def approve_shift_roster_request(
+    business_id: int,
     request_id: int,
     approval_data: ShiftRosterApprovalRequest,
     db: Session = Depends(get_db),
@@ -2349,8 +2382,8 @@ async def approve_shift_roster_request(
     - remarks: Approval remarks (optional)
     """
     try:
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        # Validate business access
+        validate_business_access(business_id, current_user, db)
         
         # Initialize shift roster service
         from app.services.shift_roster_service import ShiftRosterService
@@ -2379,8 +2412,9 @@ async def approve_shift_roster_request(
         )
 
 
-@router.put("/shiftroster/{request_id}/reject")
+@router.put("/shift-roster/{request_id}/reject")
 async def reject_shift_roster_request(
+    business_id: int,
     request_id: int,
     rejection_data: ShiftRosterApprovalRequest,
     db: Session = Depends(get_db),
@@ -2393,8 +2427,8 @@ async def reject_shift_roster_request(
     - remarks: Rejection remarks (optional)
     """
     try:
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        # Validate business access
+        validate_business_access(business_id, current_user, db)
         
         # Initialize shift roster service
         from app.services.shift_roster_service import ShiftRosterService
@@ -2424,8 +2458,9 @@ async def reject_shift_roster_request(
         )
 
 
-@router.delete("/shiftroster/{request_id}")
+@router.delete("/shift-roster/{request_id}")
 async def delete_shift_roster_request(
+    business_id: int,
     request_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
@@ -2434,8 +2469,8 @@ async def delete_shift_roster_request(
     Delete shift roster request
     """
     try:
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        # Validate business access
+        validate_business_access(business_id, current_user, db)
         
         # Initialize shift roster service
         from app.services.shift_roster_service import ShiftRosterService
@@ -2464,8 +2499,9 @@ async def delete_shift_roster_request(
         )
 
 
-@router.get("/shiftroster/filters")
+@router.get("/shift-roster/filters")
 async def get_shift_roster_filters(
+    business_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -2473,8 +2509,8 @@ async def get_shift_roster_filters(
     Get filter options for shift roster requests
     """
     try:
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        # Validate business access
+        validate_business_access(business_id, current_user, db)
         
         # Initialize shift roster service
         from app.services.shift_roster_service import ShiftRosterService
@@ -2500,6 +2536,7 @@ async def get_shift_roster_filters(
 
 @router.get("/leave-balance")
 async def get_leave_balances(
+    business_id: int,
     month: Optional[str] = Query(None, description="Month in format JUN-2025"),
     business_unit: Optional[str] = Query(None),
     location_id: Optional[int] = Query(None),
@@ -2520,6 +2557,8 @@ async def get_leave_balances(
     """
     try:
         logger.info(f"Fetching leave balances for month: {month}")
+        # Validate business access
+        validate_business_access(business_id, current_user, db)
         
         # Return mock data instead of database queries
         mock_leave_balances = [
@@ -2573,6 +2612,7 @@ async def get_leave_balances(
 
 @router.put("/leave-balance", response_model=Dict[str, str])
 async def update_leave_balance(
+    business_id: int,
     balance_data: LeaveBalanceRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
@@ -2586,11 +2626,8 @@ async def update_leave_balance(
     - Records who made the change
     """
     try:
-        # Get business ID
-        business_id = get_user_business_id(current_user, db)
-        if not business_id:
-            first_business = db.query(Employee).first()
-            business_id = first_business.business_id if first_business else 1
+        # Validate business access
+        validate_business_access(business_id, current_user, db)
         
         # Verify employee exists
         employee = db.query(Employee).filter(
@@ -2637,8 +2674,9 @@ async def update_leave_balance(
 # LEGACY COMPATIBILITY ENDPOINTS
 # ============================================================================
 
-@router.get("/dailypunch/filters")
+@router.get("/daily-punch/filters")
 async def get_daily_punch_filters(
+    business_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -2650,10 +2688,7 @@ async def get_daily_punch_filters(
     - Punch filter options (all, late, absent, nopunch)
     """
     try:
-        business_id = get_user_business_id(current_user, db)
-        if not business_id:
-            first_business = db.query(Employee).first()
-            business_id = first_business.business_id if first_business else 1
+        validate_business_access(business_id, current_user, db)
         
         # Get business units from database - HYBRID APPROACH
         business_unit_options = get_business_unit_options(db, current_user, business_id)
@@ -2712,8 +2747,9 @@ async def get_daily_punch_filters(
         }
 
 
-@router.post("/dailypunch/add-punch")
+@router.post("/daily-punch/add-punch")
 async def add_daily_punch(
+    business_id: int,
     punch_data: DailyPunchAddRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
@@ -2737,8 +2773,8 @@ async def add_daily_punch(
     try:
         logger.info(f"Received punch data: {punch_data.model_dump()}")
         
-        # Get business ID
-        business_id = get_user_business_id(current_user, db)
+        # Validate business access
+        validate_business_access(business_id, current_user, db)
         
         # Get employee_id (either directly or by looking up name)
         employee_id = punch_data.employee_id
@@ -3000,7 +3036,8 @@ async def get_employee_daily_punches(
 
 @router.delete("/dailypunch/punch/{punch_id}")
 async def delete_daily_punch(
-    punch_id: int,
+    business_id: int = Path(..., description="Business ID"),
+    punch_id: int = Path(..., description="Punch Record ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -3035,6 +3072,7 @@ async def delete_daily_punch(
 
 @router.get("/manual-attendance/filters")
 async def get_manual_attendance_filters(
+    business_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -3044,8 +3082,8 @@ async def get_manual_attendance_filters(
     try:
         logger.info("Fetching manual attendance filters with hybrid business unit logic")
         
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        # Validate business access
+        validate_business_access(business_id, current_user, db)
         
         # Generate month options for current year and next year
         current_year = date.today().year
@@ -3122,6 +3160,7 @@ async def get_manual_attendance_filters(
 @router.post("/manual-attendance/save", response_model=Dict[str, Any])
 async def save_manual_attendance(
     attendance_data: ManualAttendanceUpdate,
+    business_id: int = Path(..., description="Business ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -3307,6 +3346,7 @@ async def save_manual_attendance(
 
 @router.post("/manual-attendance/download", response_model=Dict[str, Any])
 async def download_manual_attendance(
+    business_id: int,
     download_data: ManualAttendanceDownloadRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
@@ -3317,11 +3357,8 @@ async def download_manual_attendance(
     try:
         logger.info(f"Downloading manual attendance for month: {download_data.month}")
         
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
-        if not business_id:
-            first_employee = db.query(Employee).first()
-            business_id = first_employee.business_id if first_employee else 1
+        # Validate business access
+        validate_business_access(business_id, current_user, db)
         
         # Parse month
         try:
@@ -3384,6 +3421,7 @@ async def download_manual_attendance(
 
 @router.post("/manual-attendance/upload")
 async def upload_manual_attendance(
+    business_id: int = Path(..., description="Business ID"),
     file: UploadFile = File(...),
     month: str = Form(...),
     db: Session = Depends(get_db),
@@ -3489,6 +3527,7 @@ async def upload_manual_attendance(
 @router.post("/attendance-employee/update")
 async def update_employee_attendance(
     attendance_data: AttendanceEmployeeUpdateRequest,
+    business_id: int = Path(..., description="Business ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -3614,6 +3653,7 @@ async def update_employee_attendance(
 @router.post("/attendance-employee/export")
 async def export_employee_attendance(
     export_data: AttendanceEmployeeExportRequest,
+    business_id: int = Path(..., description="Business ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -3720,6 +3760,7 @@ async def export_employee_attendance(
 @router.post("/attendance-employee/upload")
 async def upload_attendance_data(
     upload_data: AttendanceEmployeeUploadRequest,
+    business_id: int = Path(..., description="Business ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -3850,6 +3891,7 @@ async def debug_employee_attendance(
 @router.post("/attendance-employee/recalculate")
 async def recalculate_employee_attendance(
     request_data: AttendanceRecalculateRequest,
+    business_id: int = Path(..., description="Business ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -3993,6 +4035,7 @@ async def recalculate_employee_attendance(
 
 @router.get("/daily-attendance/filters")
 async def get_daily_attendance_filters(
+    business_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -4004,11 +4047,8 @@ async def get_daily_attendance_filters(
     - Status filter options
     """
     try:
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
-        if not business_id:
-            first_business = db.query(Employee).first()
-            business_id = first_business.business_id if first_business else 1
+        # Validate business access
+        validate_business_access(business_id, current_user, db)
         
         # Get business units from database - HYBRID APPROACH
         business_unit_options = get_business_unit_options(db, current_user, business_id)
@@ -4071,6 +4111,7 @@ async def get_daily_attendance_filters(
 
 @router.get("/daily-attendance/employee/{employee_id}/punches")
 async def get_employee_daily_attendance_punches(
+    business_id: int,
     employee_id: int,
     date: Optional[str] = Query(None, description="Date in format YYYY-MM-DD"),
     db: Session = Depends(get_db),
@@ -4097,6 +4138,9 @@ async def get_employee_daily_attendance_punches(
         else:
             target_date = date_class.today()
         
+        # Validate business access and employee
+        validate_business_access(business_id, current_user, db)
+        employee = validate_employee_access(db, employee_id, current_user, business_id)
         logger.info(f"Fetching punches for employee {employee_id} on {target_date}")
         
         # Get punch records from database
@@ -4132,6 +4176,7 @@ async def get_employee_daily_attendance_punches(
 
 @router.post("/daily-attendance/add-punch")
 async def add_daily_attendance_punch(
+    business_id: int,
     punch_data: DailyAttendancePunchAddRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
@@ -4171,14 +4216,11 @@ async def add_daily_attendance_punch(
                 detail=f"Invalid date/time format: {str(e)}"
             )
         
-        # Get business ID
-        business_id = get_user_business_id(current_user, db)
-        if not business_id:
-            first_business = db.query(Employee).first()
-            business_id = first_business.business_id if first_business else 1
-        
+        # Validate business access
+        validate_business_access(business_id, current_user, db)
+
         # Validate employee access with business isolation
-        employee = validate_employee_access(db, employee_id, current_user)
+        employee = validate_employee_access(db, employee_id, current_user, business_id)
         
         # Create punch record
         punch = AttendancePunch(
@@ -4264,7 +4306,8 @@ async def add_daily_attendance_punch(
 
 @router.delete("/daily-attendance/punch/{punch_id}")
 async def delete_daily_attendance_punch(
-    punch_id: int,
+    business_id: int = Path(..., description="Business ID"),
+    punch_id: int = Path(..., description="Punch Record ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -4298,6 +4341,7 @@ async def delete_daily_attendance_punch(
 
 @router.get("/leavecorrection/filters")
 async def get_leave_correction_filters(
+    business_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -4309,7 +4353,7 @@ async def get_leave_correction_filters(
         logger.info("Fetching leave correction filter options")
         
         # ✅ HYBRID BUSINESS UNIT LOGIC
-        business_id = get_user_business_id(current_user, db)
+        validate_business_access(business_id, current_user, db)
         is_superadmin_user = is_superadmin(current_user)
         
         # Get business units using hybrid approach
@@ -4370,6 +4414,7 @@ async def get_leave_correction_filters(
 
 @router.post("/leavecorrection/upload")
 async def upload_leave_corrections(
+    business_id: int = Path(..., description="Business ID"),
     file: UploadFile = File(...),
     month: str = Form(...),
     db: Session = Depends(get_db),
@@ -4604,6 +4649,7 @@ async def upload_leave_corrections(
 @router.post("/leavecorrection/save", response_model=LeaveCorrectionSaveResponse)
 async def save_leave_corrections(
     request: LeaveCorrectionSaveRequest,
+    business_id: int = Path(..., description="Business ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -4713,6 +4759,7 @@ async def save_leave_corrections(
 
 @router.get("/leavecorrection/download")
 async def download_leave_corrections(
+    business_id: int,
     month: Optional[str] = Query(None, description="Month in format JUN-2025"),
     business_unit: Optional[str] = Query("All Business Units"),
     location: Optional[str] = Query("All Locations"),
@@ -4744,14 +4791,12 @@ async def download_leave_corrections(
             month_num = 6
             month_name = "JUN"
         
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        # Validate business access
+        validate_business_access(business_id, current_user, db)
         
-        # For superadmin, get first business if no specific business_id
-        if is_superadmin:
-            first_business = db.query(Business).first()
-            business_id = first_business.id if first_business else 1
-            logger.info(f"Superadmin using business_id: {business_id}")
+        # For superadmin, allow using the business if needed
+        if is_superadmin(current_user):
+            logger.info(f"Superadmin access for business_id: {business_id}")
         
         logger.info(f"Using business_id: {business_id}, year: {year}, month: {month_num}")
         

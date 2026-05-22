@@ -90,17 +90,23 @@ class OnboardingForm(Base):
     # Related records
     documents = relationship("OnboardingDocument", back_populates="form")
     policy_records = relationship("OnboardingPolicy", back_populates="form")
+    form_policy_mappings = relationship("FormPolicyMapping", back_populates="form")
     offer_letters = relationship("OfferLetter", back_populates="form")
     submissions = relationship("FormSubmission", back_populates="form")
 
     # Properties for API compatibility (temporarily disabled until DB migration)
     @property
     def policies(self):
-        return None  # self.policies_data
+        try:
+            # Return list of attached master policy IDs via mapping table
+            return [m.policy_id for m in getattr(self, 'form_policy_mappings') or []]
+        except Exception:
+            return []
     
     @policies.setter
     def policies(self, value):
-        pass  # self.policies_data = value
+        # Setter intentionally left blank; mappings should be managed via attach endpoints
+        return
     
     @property
     def offer_letter(self):

@@ -15,7 +15,8 @@ import enum
 
 class UnitTypeEnum(enum.Enum):
     PAID_DAYS = "Paid Days"
-    CASUAL_DAYS = "Casual Days"
+    FIXED = "Fixed"
+    MONTHLY = "Monthly"
 
 class SalaryComponent(Base):
     __tablename__ = "salary_components"
@@ -41,7 +42,7 @@ class SalaryComponent(Base):
     # Fixed / Variable
 
     unit_type = Column(String(50), nullable=False)
-    # Paid Days / Casual Days
+    # Paid Days / Fixed / Monthly
 
     # -------------------------------
     # Salary Component Toggles

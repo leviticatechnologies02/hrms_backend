@@ -21,9 +21,10 @@ class OnboardingStatusEnum(str, Enum):
 # Base schemas
 # Nested explicit schemas to ensure Swagger shows concrete fields
 class PoliciesSchema(BaseModel):
-    weekoff_policy_id: int
-    shift_policy_id: int
-    work_shift_id: int
+    # Legacy schema placeholder - replaced by list[int] of master policy IDs
+    weekoff_policy_id: int = None
+    shift_policy_id: int = None
+    work_shift_id: int = None
 
 
 class OfferLetterSchema(BaseModel):
@@ -50,8 +51,8 @@ class OnboardingFormBase(BaseModel):
     verify_bank: bool = False
     verify_aadhaar: bool = False
     notes: Optional[str] = None
-    # Nested objects
-    policies: Optional[PoliciesSchema] = None
+    # Policies is a list of master policy IDs
+    policies: List[int] = []
     offer_letter: Optional[OfferLetterSchema] = None
     salary_options: Optional[SalaryOptionsSchema] = None
 
@@ -69,7 +70,7 @@ class CreateOnboardingSchema(BaseModel):
 
     notes: Optional[str] = None
 
-    policies: PoliciesSchema
+    policies: List[int] = []
 
     offer_letter: OfferLetterSchema
 
@@ -96,7 +97,7 @@ class OnboardingResponseSchema(CreateOnboardingSchema):
 
     rejection_reason: Optional[str] = None
     # Response may come from DB where nested objects are not stored yet
-    policies: Optional[PoliciesSchema] = None
+    policies: List[int] = []
     offer_letter: Optional[OfferLetterSchema] = None
     salary_options: Optional[SalaryOptionsSchema] = None
 
@@ -123,7 +124,7 @@ class OnboardingFormUpdate(BaseModel):
     verify_bank: Optional[bool] = None
     verify_aadhaar: Optional[bool] = None
     notes: Optional[str] = None
-    policies: Optional[PoliciesSchema] = None
+    policies: Optional[List[int]] = None
     offer_letter: Optional[OfferLetterSchema] = None
     salary_options: Optional[SalaryOptionsSchema] = None
     status: Optional[str] = None
@@ -135,7 +136,7 @@ class OnboardingFormUpdate(BaseModel):
     expires_at: Optional[datetime] = None
 
     # Nested update objects
-    policies: Optional[PoliciesSchema] = None
+    policies: Optional[List[int]] = None
     offer_letter: Optional[OfferLetterSchema] = None
     salary_options: Optional[SalaryOptionsSchema] = None
 
@@ -153,7 +154,7 @@ class OnboardingFormResponse(OnboardingFormBase):
     expires_at: Optional[datetime] = None
     rejection_reason: Optional[str] = None
     employee_id: Optional[int] = None
-    policies: Optional[PoliciesSchema] = None
+    policies: Optional[List[int]] = None
     offer_letter: Optional[OfferLetterSchema] = None
     salary_options: Optional[SalaryOptionsSchema] = None
     

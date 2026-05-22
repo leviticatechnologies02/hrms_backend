@@ -31,6 +31,7 @@ from decimal import Decimal
 
 from app.core.database import get_db
 from app.api.v1.deps import get_current_user, get_current_admin
+from app.utils.tenant import validate_business
 from app.models.user import User
 from app.models.employee import Employee
 from app.models.department import Department
@@ -60,6 +61,24 @@ from app.services.tds_return_service import TDSReturnService
 from pydantic import BaseModel, Field
 
 router = APIRouter()
+
+
+# Centralized business access validation helper
+def validate_business_access(business_id: int, current_user: User, db: Session):
+    from app.models.business import Business
+    from app.utils.business_unit_utils import is_superadmin
+
+    # Ensure business exists (simple tenant validation)
+    business = validate_business(business_id, db)
+
+    # Additional access control: owner or superadmin only
+    if getattr(business, 'owner_id', None) != current_user.id and not is_superadmin(current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have access to this business"
+        )
+
+    return business
 
 
 # ============================================================================
@@ -308,6 +327,7 @@ class TDSReturnsResponse(BaseModel):
 
 @router.get("/salary-variable", response_model=List[SalaryVariableResponse])
 async def get_salary_variables(
+    business_id: int,
     employee_id: Optional[int] = Query(None),
     page: int = Query(1, ge=1),
     size: int = Query(10, ge=1, le=100),
@@ -323,8 +343,8 @@ async def get_salary_variables(
     - Variable amounts and dates
     """
     try:
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        # Validate business access
+        validate_business_access(business_id, current_user, db)
         
         # Use service layer
         service = SalaryVariableService(db)
@@ -374,6 +394,7 @@ class SalaryVariableRequest(BaseModel):
 
 @router.post("/salary-variable", response_model=SalaryVariableResponse)
 async def create_salary_variable(
+    business_id: int,
     variable_data: SalaryVariableCreate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
@@ -387,8 +408,8 @@ async def create_salary_variable(
     - Recurring or one-time variable
     """
     try:
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        # Validate business access
+        validate_business_access(business_id, current_user, db)
         
         # Use service layer
         service = SalaryVariableService(db)
@@ -428,6 +449,7 @@ async def create_salary_variable(
 
 @router.put("/salary-variable/{variable_id}", response_model=SalaryVariableResponse)
 async def update_salary_variable(
+    business_id: int,
     variable_id: int,
     variable_data: SalaryVariableUpdate,
     db: Session = Depends(get_db),
@@ -442,8 +464,8 @@ async def update_salary_variable(
     - Variable configuration
     """
     try:
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        # Validate business access
+        validate_business_access(business_id, current_user, db)
         
         # Use service layer
         service = SalaryVariableService(db)
@@ -484,6 +506,7 @@ async def update_salary_variable(
 
 @router.delete("/salary-variable/{variable_id}", response_model=Dict[str, str])
 async def delete_salary_variable(
+    business_id: int,
     variable_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
@@ -496,8 +519,8 @@ async def delete_salary_variable(
     - Maintains audit trail
     """
     try:
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        # Validate business access
+        validate_business_access(business_id, current_user, db)
         
         # Use service layer
         service = SalaryVariableService(db)
@@ -526,9 +549,10 @@ async def delete_salary_variable(
 
 
 @router.get("/salary-variable/export-csv")
-async def export_salary_variable_csv(
+async def export_salary_variables_csv(
+    business_id: int,
     employee_id: Optional[int] = Query(None),
-    month: str = Query("January 2026", description="Month in format 'January 2026'"),
+    month: Optional[str] = Query(None),
     location: Optional[str] = Query(None),
     cost_center: Optional[str] = Query(None),
     department: Optional[str] = Query(None),
@@ -543,8 +567,8 @@ async def export_salary_variable_csv(
         from fastapi.responses import StreamingResponse
         import io
         
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        # Validate business access
+        validate_business_access(business_id, current_user, db)
         
         # Use service layer
         service = SalaryVariableService(db)
@@ -557,12 +581,22 @@ async def export_salary_variable_csv(
             department=department,
             business_unit=business_unit
         )
-        
+
+        # Safely build filename even when `month` is None
+        if month:
+            filename_month = month.replace(' ', '_')
+        else:
+            filename_month = datetime.now().strftime('%Y%m%d')
+
+        # Ensure csv_content is a string
+        if csv_content is None:
+            csv_content = ""
+
         # Return as streaming response
         return StreamingResponse(
             io.BytesIO(csv_content.encode('utf-8')),
             media_type="text/csv",
-            headers={"Content-Disposition": f"attachment; filename=salary_variables_{month.replace(' ', '_')}.csv"}
+            headers={"Content-Disposition": f"attachment; filename=salary_variables_{filename_month}.csv"}
         )
     
     except Exception as e:
@@ -574,6 +608,7 @@ async def export_salary_variable_csv(
 
 @router.post("/salary-variable/import-csv")
 async def import_salary_variable_csv(
+    business_id: int,
     csv_data: str = Body(..., media_type="text/plain"),
     overwrite_existing: bool = Query(False),
     consider_arrear: bool = Query(False),
@@ -589,8 +624,8 @@ async def import_salary_variable_csv(
     - consider_arrear: Whether to treat as arrear payments
     """
     try:
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        # Validate business access
+        validate_business_access(business_id, current_user, db)
         
         # Use service layer
         service = SalaryVariableService(db)
@@ -617,6 +652,7 @@ async def import_salary_variable_csv(
 
 @router.get("/salary-variable-employees", response_model=SalaryVariableEmployeesResponse)
 async def get_salary_variable_employees(
+    business_id: int,
     month: str = Query("January 2026", description="Month in format 'January 2026'"),
     business_unit: Optional[str] = Query(None),
     location: Optional[str] = Query(None),
@@ -643,8 +679,8 @@ async def get_salary_variable_employees(
     try:
         from app.services.salary_variable_service import SalaryVariableService
         
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        # Validate business access
+        validate_business_access(business_id, current_user, db)
         
         # Use service layer
         service = SalaryVariableService(db)
@@ -678,6 +714,7 @@ async def get_salary_variable_employees(
 
 @router.get("/salary-variable-filters", response_model=SalaryVariableFiltersResponse)
 async def get_salary_variable_filters(
+    business_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -692,8 +729,8 @@ async def get_salary_variable_filters(
     try:
         from app.services.salary_variable_service import SalaryVariableService
         
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        # Validate business access
+        validate_business_access(business_id, current_user, db)
         
         # Use service layer
         service = SalaryVariableService(db)
@@ -719,6 +756,7 @@ async def get_salary_variable_filters(
 
 @router.post("/salary-variable-update", response_model=Dict[str, str])
 async def update_salary_variable_employee(
+    business_id: int,
     update_data: SalaryVariableUpdateRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
@@ -734,8 +772,8 @@ async def update_salary_variable_employee(
     try:
         from app.services.salary_variable_service import SalaryVariableService
         
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        # Validate business access
+        validate_business_access(business_id, current_user, db)
         
         # Use service layer
         service = SalaryVariableService(db)
@@ -761,6 +799,7 @@ async def update_salary_variable_employee(
 
 @router.post("/salary-variable-add-non-cash", response_model=Dict[str, Any])
 async def add_non_cash_salary_component(
+    business_id: int,
     request_data: AddNonCashSalaryRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
@@ -776,8 +815,8 @@ async def add_non_cash_salary_component(
     try:
         from app.services.salary_variable_service import SalaryVariableService
         
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        # Validate business access
+        validate_business_access(business_id, current_user, db)
         
         # Use service layer
         service = SalaryVariableService(db)
@@ -812,6 +851,7 @@ async def add_non_cash_salary_component(
 
 @router.get("/salary-units", response_model=List[SalaryUnitsResponse])
 async def get_salary_units(
+    business_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -824,6 +864,8 @@ async def get_salary_units(
     - Base amounts
     """
     try:
+        # Validate business access (even for mock data)
+        validate_business_access(business_id, current_user, db)
         # Mock data for salary units
         mock_units = [
             SalaryUnitsResponse(
@@ -866,6 +908,7 @@ async def get_salary_units(
 
 @router.get("/salary-units-employees", response_model=List[SalaryUnitsEmployeeResponse])
 async def get_salary_units_employees(
+    business_id: int,
     month: str = Query("January 2026", description="Month in format 'January 2026'"),
     business_unit: Optional[str] = Query(None),
     location: Optional[str] = Query(None),
@@ -892,8 +935,8 @@ async def get_salary_units_employees(
     try:
         from app.services.salary_units_service import SalaryUnitsService
         
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        # Validate business access
+        validate_business_access(business_id, current_user, db)
         
         # Use service layer
         service = SalaryUnitsService(db)
@@ -922,6 +965,7 @@ async def get_salary_units_employees(
 
 @router.get("/salary-units-filters", response_model=SalaryUnitsFiltersResponse)
 async def get_salary_units_filters(
+    business_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -935,8 +979,8 @@ async def get_salary_units_filters(
     try:
         from app.services.salary_units_service import SalaryUnitsService
         
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        # Validate business access
+        validate_business_access(business_id, current_user, db)
         
         # Use service layer
         service = SalaryUnitsService(db)
@@ -961,6 +1005,7 @@ async def get_salary_units_filters(
 
 @router.post("/salary-units-update", response_model=Dict[str, str])
 async def update_salary_units_employee(
+    business_id: int,
     update_data: SalaryUnitsUpdateRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
@@ -976,8 +1021,8 @@ async def update_salary_units_employee(
     try:
         from app.services.salary_units_service import SalaryUnitsService
         
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        # Validate business access
+        validate_business_access(business_id, current_user, db)
         
         # Use service layer
         service = SalaryUnitsService(db)
@@ -1008,6 +1053,7 @@ async def update_salary_units_employee(
 
 @router.post("/salary-units-import-travel", response_model=Dict[str, str])
 async def import_travel_kms_to_salary_units(
+    business_id: int,
     import_data: TravelKmsImportRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
@@ -1032,9 +1078,8 @@ async def import_travel_kms_to_salary_units(
     try:
         from app.services.salary_units_service import SalaryUnitsService
         
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
-        
+        # Validate business path and access
+        validate_business_access(business_id, current_user, db)
         # Use service layer
         service = SalaryUnitsService(db)
         result = service.import_travel_kms(
@@ -1060,6 +1105,7 @@ async def import_travel_kms_to_salary_units(
 
 @router.get("/salary-units-export")
 async def export_salary_units_csv(
+    business_id: int,
     month: str = Query("January 2026", description="Month in format 'January 2026'"),
     location: Optional[str] = Query(None),
     cost_center: Optional[str] = Query(None),
@@ -1080,8 +1126,8 @@ async def export_salary_units_csv(
         from fastapi.responses import StreamingResponse
         import io
         
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        # Validate business from path and access
+        validate_business_access(business_id, current_user, db)
         
         # Use service layer
         service = SalaryUnitsService(db)
@@ -1096,10 +1142,12 @@ async def export_salary_units_csv(
         # Create streaming response
         csv_buffer = io.StringIO(csv_content)
         
+        # Safely build filename
+        filename_month = month.replace(' ', '-') if month else datetime.now().strftime('%Y%m%d')
         return StreamingResponse(
             io.BytesIO(csv_content.encode('utf-8')),
             media_type="text/csv",
-            headers={"Content-Disposition": f"attachment; filename=salary-units-{month.replace(' ', '-')}.csv"}
+            headers={"Content-Disposition": f"attachment; filename=salary-units-{filename_month}.csv"}
         )
     
     except Exception as e:
@@ -1111,6 +1159,7 @@ async def export_salary_units_csv(
 
 @router.post("/salary-units-import", response_model=Dict[str, Any])
 async def import_salary_units_csv(
+    business_id: int,
     request: Request,
     month: str = Query("January 2026", description="Month in format 'January 2026'"),
     overwrite_existing: bool = Query(False),
@@ -1133,8 +1182,8 @@ async def import_salary_units_csv(
         csv_content = await request.body()
         csv_content = csv_content.decode('utf-8')
         
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        # Validate business path and access
+        validate_business_access(business_id, current_user, db)
         
         # Use service layer
         service = SalaryUnitsService(db)
@@ -1158,6 +1207,7 @@ async def import_salary_units_csv(
 
 @router.get("/salary-units/{unit_id}")
 async def get_salary_unit_by_id(
+    business_id: int,
     unit_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
@@ -1173,9 +1223,7 @@ async def get_salary_unit_by_id(
     try:
         from app.models.datacapture import EmployeeSalaryUnit
         
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
-        
+        validate_business_access(business_id, current_user, db)
         # Query salary unit
         query = db.query(EmployeeSalaryUnit).filter(
             EmployeeSalaryUnit.id == unit_id,
@@ -1223,6 +1271,7 @@ async def get_salary_unit_by_id(
 
 @router.put("/salary-units/{unit_id}")
 async def update_salary_unit_by_id(
+    business_id: int,
     unit_id: int,
     amount: float = Body(...),
     comments: Optional[str] = Body(None),
@@ -1239,9 +1288,7 @@ async def update_salary_unit_by_id(
     try:
         from app.models.datacapture import EmployeeSalaryUnit
         
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
-        
+        validate_business_access(business_id, current_user, db)
         # Query salary unit
         query = db.query(EmployeeSalaryUnit).filter(
             EmployeeSalaryUnit.id == unit_id,
@@ -1289,6 +1336,7 @@ async def update_salary_unit_by_id(
 
 @router.delete("/salary-units/{unit_id}")
 async def delete_salary_unit_by_id(
+    business_id: int,
     unit_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
@@ -1302,9 +1350,7 @@ async def delete_salary_unit_by_id(
     try:
         from app.models.datacapture import EmployeeSalaryUnit
         
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
-        
+        validate_business_access(business_id, current_user, db)
         # Query salary unit
         query = db.query(EmployeeSalaryUnit).filter(
             EmployeeSalaryUnit.id == unit_id,
@@ -1355,6 +1401,7 @@ async def delete_salary_unit_by_id(
 
 @router.get("/deduction", response_model=List[DeductionResponse])
 async def get_deductions(
+    business_id: int,
     employee_id: Optional[int] = Query(None),
     deduction_type: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
@@ -1371,8 +1418,8 @@ async def get_deductions(
     - Deduction amounts and types
     """
     try:
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        # Validate business access for path business_id
+        validate_business_access(business_id, current_user, db)
         # Mock data for deductions
         mock_deductions = []
         
@@ -1450,6 +1497,7 @@ class CopyFromPreviousPeriodRequest(BaseModel):
 
 @router.get("/deduction-employees", response_model=List[DeductionEmployeeResponse], operation_id="get_deduction_employees_v1")
 async def get_deduction_employees(
+    business_id: int,
     month: str = Query("AUG-2025", description="Month in format 'AUG-2025'"),
     business_unit: Optional[str] = Query(None),
     location: Optional[str] = Query(None),
@@ -1470,8 +1518,8 @@ async def get_deduction_employees(
     - Includes gross salary, exemptions, and net salary calculations
     """
     try:
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        # Validate business from path and access
+        validate_business_access(business_id, current_user, db)
         
         # Use service layer for real database integration
         service = DeductionService(db)
@@ -1499,6 +1547,7 @@ async def get_deduction_employees(
 
 @router.get("/deductionTDS", response_model=List[DeductionEmployeeResponse])
 async def get_deduction_tds_employees(
+    business_id: int,
     month: str = Query("AUG-2025", description="Month in format 'AUG-2025' or 'YYYY-YYYY' for financial year"),
     business_unit: Optional[str] = Query(None),
     location: Optional[str] = Query(None),
@@ -1526,8 +1575,8 @@ async def get_deduction_tds_employees(
             current_month = datetime.now().strftime("%b-%Y").upper()
             month = current_month
         
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        # Validate business from path and access
+        validate_business_access(business_id, current_user, db)
         
         # Use service layer for real database integration
         service = DeductionService(db)
@@ -1557,6 +1606,7 @@ async def get_deduction_tds_employees(
 
 @router.get("/deductionTDS-filters", response_model=Dict[str, List[str]])
 async def get_deduction_tds_filters(
+    business_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -1568,8 +1618,7 @@ async def get_deduction_tds_filters(
     - Used for dropdown filters in deduction TDS frontend
     """
     try:
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        validate_business_access(business_id, current_user, db)
         # Use service layer
         service = DeductionService(db)
         filters = service.get_deduction_filters(business_id=business_id, current_user=current_user)
@@ -1585,6 +1634,7 @@ async def get_deduction_tds_filters(
 
 @router.post("/deductionTDS-update", response_model=Dict[str, str])
 async def update_deduction_tds_employee(
+    business_id: int,
     update_data: DeductionUpdateRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
@@ -1598,8 +1648,7 @@ async def update_deduction_tds_employee(
     - Month-specific data
     """
     try:
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        validate_business_access(business_id, current_user, db)
         
         # Use service layer
         service = DeductionService(db)
@@ -1629,6 +1678,7 @@ async def update_deduction_tds_employee(
 
 @router.get("/deductionTDS-export")
 async def export_deduction_tds_data(
+    business_id: int,
     month: str = Query("AUG-2025", description="Month in format 'AUG-2025'"),
     location: Optional[str] = Query(None),
     cost_center: Optional[str] = Query(None),
@@ -1643,8 +1693,7 @@ async def export_deduction_tds_data(
         from fastapi.responses import StreamingResponse
         import io
         
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        validate_business_access(business_id, current_user, db)
         # Use service layer
         service = DeductionService(db)
         csv_content = service.export_deductions_csv(
@@ -1656,10 +1705,11 @@ async def export_deduction_tds_data(
         )
         
         # Return as streaming response
+        filename_month = month.replace('-', '_') if month else datetime.now().strftime('%Y%m%d')
         return StreamingResponse(
             io.BytesIO(csv_content.encode('utf-8')),
             media_type="text/csv",
-            headers={"Content-Disposition": f"attachment; filename=deduction_tds_{month.replace('-', '_')}.csv"}
+            headers={"Content-Disposition": f"attachment; filename=deduction_tds_{filename_month}.csv"}
         )
     
     except Exception as e:
@@ -1671,6 +1721,7 @@ async def export_deduction_tds_data(
 
 @router.get("/deduction-filters", response_model=Dict[str, List[str]], operation_id="get_deduction_filters_v1")
 async def get_deduction_filters(
+    business_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -1683,10 +1734,9 @@ async def get_deduction_filters(
     - Used for dropdown filters in deduction frontend
     """
     try:
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
-        # The repository already has correct logic to determine business context based on user role
-        
+        # Validate business path and access
+        validate_business_access(business_id, current_user, db)
+
         # Use service layer
         service = DeductionService(db)
         filters = service.get_deduction_filters(business_id=business_id, current_user=current_user)
@@ -1702,6 +1752,7 @@ async def get_deduction_filters(
 
 @router.post("/deduction-update", response_model=Dict[str, str], operation_id="update_deduction_employee_v1")
 async def update_deduction_employee(
+    business_id: int,
     update_data: DeductionUpdateRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
@@ -1715,9 +1766,8 @@ async def update_deduction_employee(
     - Month-specific data
     """
     try:
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
-        
+        validate_business_access(business_id, current_user, db)
+
         # Use service layer
         service = DeductionService(db)
         result = service.update_employee_deduction(
@@ -1746,6 +1796,7 @@ async def update_deduction_employee(
 
 @router.post("/deduction-copy-previous", response_model=Dict[str, Any])
 async def copy_deductions_from_previous_period(
+    business_id: int,
     copy_data: CopyFromPreviousPeriodRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
@@ -1759,8 +1810,7 @@ async def copy_deductions_from_previous_period(
     - Supports overwrite existing option
     """
     try:
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        validate_business_access(business_id, current_user, db)
         # Use service layer
         service = DeductionService(db)
         result = service.copy_from_previous_period(
@@ -1769,7 +1819,8 @@ async def copy_deductions_from_previous_period(
             deduction_type=copy_data.deduction_type,
             overwrite_existing=copy_data.overwrite_existing,
             current_user=current_user,
-            created_by=current_user.id
+            created_by=current_user.id,
+            business_id=business_id
         )
         
         return result
@@ -1788,6 +1839,7 @@ async def copy_deductions_from_previous_period(
 
 @router.get("/deduction-export", operation_id="export_deduction_data_v1")
 async def export_deduction_data(
+    business_id: int,
     month: str = Query("AUG-2025", description="Month in format 'AUG-2025'"),
     location: Optional[str] = Query(None),
     cost_center: Optional[str] = Query(None),
@@ -1802,8 +1854,7 @@ async def export_deduction_data(
         from fastapi.responses import StreamingResponse
         import io
         
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        validate_business_access(business_id, current_user, db)
         # Use service layer
         service = DeductionService(db)
         csv_content = service.export_deductions_csv(
@@ -1813,12 +1864,12 @@ async def export_deduction_data(
             department=department,
             business_id=business_id
         )
-        
-        # Return as streaming response
+
+        filename_month = month.replace('-', '_') if month else datetime.now().strftime('%Y%m%d')
         return StreamingResponse(
             io.BytesIO(csv_content.encode('utf-8')),
             media_type="text/csv",
-            headers={"Content-Disposition": f"attachment; filename=deductions_{month.replace('-', '_')}.csv"}
+            headers={"Content-Disposition": f"attachment; filename=deductions_{filename_month}.csv"}
         )
     
     except Exception as e:
@@ -1830,6 +1881,7 @@ async def export_deduction_data(
 
 @router.post("/deduction-import", operation_id="import_deduction_data_v1")
 async def import_deduction_data(
+    business_id: int,
     month: str = Query("AUG-2025", description="Month in format 'AUG-2025'"),
     overwrite_existing: bool = Query(False),
     consider_arrear: bool = Query(False),
@@ -1845,9 +1897,8 @@ async def import_deduction_data(
     - Expected columns: Employee Code, Amount, Comments, Deduction Type
     """
     try:
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
-        
+        validate_business_access(business_id, current_user, db)
+
         # Use service layer
         service = DeductionService(db)
         result = service.import_deductions_csv(
@@ -1855,7 +1906,7 @@ async def import_deduction_data(
             month=month,
             overwrite_existing=overwrite_existing,
             consider_arrear=consider_arrear,
-            current_user=current_user,
+            business_id=business_id,
             created_by=current_user.id
         )
         
@@ -1870,6 +1921,7 @@ async def import_deduction_data(
 
 @router.get("/deduction-details/{employee_code}")
 async def get_employee_deduction_details(
+    business_id: int,
     employee_code: str,
     month: str = Query("AUG-2025", description="Month in format 'AUG-2025'"),
     db: Session = Depends(get_db),
@@ -1884,13 +1936,13 @@ async def get_employee_deduction_details(
     - Total deduction amount
     """
     try:
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        validate_business_access(business_id, current_user, db)
         # Use service layer
         service = DeductionService(db)
         details = service.get_employee_deduction_details(
             employee_code=employee_code,
-            month=month
+            month=month,
+            business_id=business_id
         )
         
         return details
@@ -1918,6 +1970,7 @@ async def get_employee_deduction_details(
 
 @router.get("/incometaxtds", response_model=List[IncomeTaxTDSResponse])
 async def get_income_tax_tds(
+    business_id: int,
     employee_id: Optional[int] = Query(None),
     financial_year: Optional[str] = Query(None),
     db: Session = Depends(get_db),
@@ -1932,9 +1985,8 @@ async def get_income_tax_tds(
     - Tax amounts and periods
     """
     try:
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
-        
+        validate_business_access(business_id, current_user, db)
+
         # Mock data for income tax TDS
         mock_tds = []
         
@@ -1976,6 +2028,7 @@ async def get_income_tax_tds(
 
 @router.get("/extrahours-employees", response_model=List[ExtraHoursEmployeeResponse])
 async def get_extrahours_employees(
+    business_id: int,
     month: str = Query("AUG-2025", pattern=r"^[A-Z]{3}-\d{4}$", description="Month in format 'AUG-2025'"),
     business_unit: Optional[str] = Query(None, max_length=100),
     location: Optional[str] = Query(None, max_length=100),
@@ -1998,9 +2051,9 @@ async def get_extrahours_employees(
     try:
         from app.services.extra_hours_service import ExtraHoursService
         
-        # Get business ID from current user to verify access
-        business_id = get_user_business_id(current_user, db)
-        
+        # Validate business access
+        validate_business_access(business_id, current_user, db)
+
         # Use service layer
         service = ExtraHoursService(db)
         employees = service.get_employees_with_extra_hours(
@@ -2025,6 +2078,7 @@ async def get_extrahours_employees(
 
 @router.get("/extrahours-filters", response_model=ExtraHoursFiltersResponse)
 async def get_extrahours_filters(
+    business_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -2038,8 +2092,8 @@ async def get_extrahours_filters(
     try:
         from app.services.extra_hours_service import ExtraHoursService
         
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        # Validate business access
+        validate_business_access(business_id, current_user, db)
         # Use service layer
         service = ExtraHoursService(db)
         filters = service.get_filter_options(current_user=current_user)
@@ -2055,6 +2109,7 @@ async def get_extrahours_filters(
 
 @router.get("/extrahours-search", response_model=List[ExtraHoursSearchResponse])
 async def search_extrahours_employees(
+    business_id: int,
     search: str = Query(..., min_length=1, max_length=100, description="Search term for employee name"),
     limit: int = Query(5, ge=1, le=10),
     db: Session = Depends(get_db),
@@ -2070,8 +2125,8 @@ async def search_extrahours_employees(
     try:
         from app.services.extra_hours_service import ExtraHoursService
         
-        # Get business ID from current user to verify access
-        business_id = get_user_business_id(current_user, db)
+        # Validate business access
+        validate_business_access(business_id, current_user, db)
         
         # Use service layer
         service = ExtraHoursService(db)
@@ -2088,6 +2143,7 @@ async def search_extrahours_employees(
 
 @router.post("/extrahours-create", response_model=ExtraHoursCreateResponse)
 async def create_extrahours_record(
+    business_id: int,
     request: ExtraHoursCreateRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
@@ -2103,9 +2159,9 @@ async def create_extrahours_record(
     try:
         from app.services.extra_hours_service import ExtraHoursService
         
-        # Get business ID from current user to verify access
-        business_id = get_user_business_id(current_user, db)
-        
+        # Validate business access
+        validate_business_access(business_id, current_user, db)
+
         # Use service layer
         service = ExtraHoursService(db)
         result = service.create_extra_hours_record(
@@ -2134,6 +2190,7 @@ async def create_extrahours_record(
 
 @router.get("/extrahours-export")
 async def export_extrahours_data(
+    business_id: int,
     month: str = Query("AUG-2025", description="Month in format 'AUG-2025'"),
     location: Optional[str] = Query(None),
     department: Optional[str] = Query(None),
@@ -2148,9 +2205,9 @@ async def export_extrahours_data(
         import io
         from app.services.extra_hours_service import ExtraHoursService
         
-        # Get business ID from current user to verify access
-        business_id = get_user_business_id(current_user, db)
-        
+        # Validate business access
+        validate_business_access(business_id, current_user, db)
+
         # Use service layer
         service = ExtraHoursService(db)
         csv_content = service.generate_csv_export(
@@ -2159,12 +2216,12 @@ async def export_extrahours_data(
             department=department,
             current_user=current_user
         )
-        
-        # Return as streaming response
+
+        filename_month = month.replace('-', '_') if month else datetime.now().strftime('%Y%m%d')
         return StreamingResponse(
             io.BytesIO(csv_content.encode('utf-8')),
             media_type="text/csv",
-            headers={"Content-Disposition": f"attachment; filename=extra_hours_{month.replace('-', '_')}.csv"}
+            headers={"Content-Disposition": f"attachment; filename=extra_hours_{filename_month}.csv"}
         )
     
     except Exception as e:
@@ -2176,6 +2233,7 @@ async def export_extrahours_data(
 
 @router.post("/extrahours-import", response_model=ExtraHoursImportResponse)
 async def import_extrahours_data(
+    business_id: int,
     request: ExtraHoursImportRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
@@ -2190,8 +2248,8 @@ async def import_extrahours_data(
     try:
         from app.services.extra_hours_service import ExtraHoursService
         
-        # Get business ID from current user to verify access
-        business_id = get_user_business_id(current_user, db)
+        # Validate business access
+        validate_business_access(business_id, current_user, db)
         
         # Use service layer
         service = ExtraHoursService(db)
@@ -2214,6 +2272,7 @@ async def import_extrahours_data(
 
 @router.put("/extrahours/{extra_hours_id}")
 async def update_extra_hours(
+    business_id: int,
     extra_hours_id: int,
     extra_hours_data: ExtraHoursCreateRequest,
     db: Session = Depends(get_db),
@@ -2229,9 +2288,9 @@ async def update_extra_hours(
     - Approval status
     """
     try:
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
-        
+        # Validate business access
+        validate_business_access(business_id, current_user, db)
+
         # Verify the extra hours record exists and belongs to user's business
         from app.models.datacapture import ExtraHour
         extra_hours_record = db.query(ExtraHour).filter(
@@ -2282,6 +2341,7 @@ async def update_extra_hours(
 
 @router.delete("/extrahours/{extra_hours_id}", response_model=Dict[str, str])
 async def delete_extra_hours(
+    business_id: int,
     extra_hours_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
@@ -2294,8 +2354,8 @@ async def delete_extra_hours(
     - Maintains audit trail
     """
     try:
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        # Validate business access
+        validate_business_access(business_id, current_user, db)
         
         # Verify the extra hours record exists and belongs to user's business
         from app.models.datacapture import ExtraHour
@@ -2339,6 +2399,7 @@ async def delete_extra_hours(
 
 @router.get("/loans")
 async def get_loans(
+    business_id: int,
     from_date: Optional[str] = Query(None),
     to_date: Optional[str] = Query(None),
     search: Optional[str] = Query(None),
@@ -2362,8 +2423,7 @@ async def get_loans(
         from app.services.loan_service import LoanService
         from fastapi import HTTPException, status
         
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        validate_business_access(business_id, current_user, db)
         loan_service = LoanService(db)
         
         loans = loan_service.get_loans_list(
@@ -2389,6 +2449,7 @@ async def get_loans(
 
 @router.get("/loans-filters")
 async def get_loan_filters(
+    business_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -2396,8 +2457,7 @@ async def get_loan_filters(
     try:
         from app.services.loan_service import LoanService
         
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        validate_business_access(business_id, current_user, db)
         loan_service = LoanService(db)
         
         filters = loan_service.get_loan_filters(current_user=current_user)
@@ -2412,6 +2472,7 @@ async def get_loan_filters(
 
 @router.get("/loans-search")
 async def search_loan_employees(
+    business_id: int,
     search: str = Query(..., min_length=1),
     limit: int = Query(10, ge=1, le=50),
     db: Session = Depends(get_db),
@@ -2421,8 +2482,7 @@ async def search_loan_employees(
     try:
         from app.services.loan_service import LoanService
         
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        validate_business_access(business_id, current_user, db)
         loan_service = LoanService(db)
         
         employees = loan_service.search_employees(
@@ -2442,6 +2502,7 @@ async def search_loan_employees(
 
 @router.get("/loans-export-csv")
 async def export_loans_csv(
+    business_id: int,
     from_date: Optional[str] = Query(None),
     to_date: Optional[str] = Query(None),
     search: Optional[str] = Query(None),
@@ -2455,8 +2516,7 @@ async def export_loans_csv(
         from app.services.loan_service import LoanService
         from fastapi.responses import Response
         
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        validate_business_access(business_id, current_user, db)
         loan_service = LoanService(db)
         
         csv_content = loan_service.export_loans_csv(
@@ -2483,6 +2543,7 @@ async def export_loans_csv(
 
 @router.get("/loans/{loan_id}")
 async def get_loan_details(
+    business_id: int,
     loan_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
@@ -2491,8 +2552,7 @@ async def get_loan_details(
     try:
         from app.services.loan_service import LoanService
         
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        validate_business_access(business_id, current_user, db)
         loan_service = LoanService(db)
         
         loan = loan_service.get_loan_details(loan_id, business_id=business_id)
@@ -2546,6 +2606,7 @@ class LoanRequest(BaseModel):
 
 @router.post("/loans")
 async def create_loan(
+    business_id: int,
     loan_data: LoanRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
@@ -2554,8 +2615,7 @@ async def create_loan(
     try:
         from app.services.loan_service import LoanService
         
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        validate_business_access(business_id, current_user, db)
         created_by = getattr(current_user, 'id', None)
         loan_service = LoanService(db)
         
@@ -2581,6 +2641,7 @@ async def create_loan(
 
 @router.put("/loans/{loan_id}")
 async def update_loan(
+    business_id: int,
     loan_id: int,
     loan_data: LoanRequest,
     db: Session = Depends(get_db),
@@ -2590,8 +2651,7 @@ async def update_loan(
     try:
         from app.services.loan_service import LoanService
         
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        validate_business_access(business_id, current_user, db)
         loan_service = LoanService(db)
         
         loan = loan_service.update_loan(
@@ -2619,6 +2679,7 @@ async def update_loan(
 
 @router.delete("/loans/{loan_id}", operation_id="delete_loan_v1")
 async def delete_loan(
+    business_id: int,
     loan_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
@@ -2627,8 +2688,7 @@ async def delete_loan(
     try:
         from app.services.loan_service import LoanService
         
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        validate_business_access(business_id, current_user, db)
         loan_service = LoanService(db)
         
         success = loan_service.delete_loan(loan_id, business_id=business_id)
@@ -2652,6 +2712,7 @@ async def delete_loan(
 
 @router.get("/itDeclarations")
 async def get_it_declarations(
+    business_id: int,
     financial_year: Optional[str] = Query(None),
     employee_id: Optional[int] = Query(None),
     status: Optional[str] = Query(None),
@@ -2672,8 +2733,7 @@ async def get_it_declarations(
     try:
         from app.services.it_declaration_service import ITDeclarationService
         
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        validate_business_access(business_id, current_user, db)
         it_declaration_service = ITDeclarationService(db)
         
         declarations = it_declaration_service.get_declarations_list(
@@ -2711,6 +2771,7 @@ async def get_it_declarations(
 
 @router.get("/itDeclarations-filters")
 async def get_it_declaration_filters(
+    business_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -2718,8 +2779,7 @@ async def get_it_declaration_filters(
     try:
         from app.services.it_declaration_service import ITDeclarationService
         
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        validate_business_access(business_id, current_user, db)
         it_declaration_service = ITDeclarationService(db)
         
         filters = it_declaration_service.get_declaration_filters(current_user=current_user)
@@ -2734,6 +2794,7 @@ async def get_it_declaration_filters(
 
 @router.get("/itDeclarations-search")
 async def search_it_declaration_employees(
+    business_id: int,
     search: str = Query(..., min_length=1),
     limit: int = Query(10, ge=1, le=50),
     db: Session = Depends(get_db),
@@ -2743,8 +2804,7 @@ async def search_it_declaration_employees(
     try:
         from app.services.it_declaration_service import ITDeclarationService
         
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        validate_business_access(business_id, current_user, db)
         it_declaration_service = ITDeclarationService(db)
         
         employees = it_declaration_service.search_employees(
@@ -2764,6 +2824,7 @@ async def search_it_declaration_employees(
 
 @router.get("/itDeclarations-employee/{employee_id}")
 async def get_employee_it_declaration(
+    business_id: int,
     employee_id: int,
     financial_year: str = Query(...),
     db: Session = Depends(get_db),
@@ -2773,8 +2834,7 @@ async def get_employee_it_declaration(
     try:
         from app.services.it_declaration_service import ITDeclarationService
         
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        validate_business_access(business_id, current_user, db)
         it_declaration_service = ITDeclarationService(db)
         
         declaration = it_declaration_service.get_employee_declaration(
@@ -2799,6 +2859,7 @@ async def get_employee_it_declaration(
 
 @router.put("/itDeclarations-field")
 async def update_declaration_field(
+    business_id: int,
     employee_id: int = Body(...),
     financial_year: str = Body(...),
     field_name: str = Body(...),
@@ -2810,8 +2871,7 @@ async def update_declaration_field(
     try:
         from app.services.it_declaration_service import ITDeclarationService
         
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        validate_business_access(business_id, current_user, db)
         it_declaration_service = ITDeclarationService(db)
         
         result = it_declaration_service.update_declaration_field(
@@ -2838,6 +2898,7 @@ async def update_declaration_field(
 
 @router.post("/itDeclarations-submit")
 async def submit_it_declaration(
+    business_id: int,
     employee_id: int = Body(...),
     financial_year: str = Body(...),
     db: Session = Depends(get_db),
@@ -2847,8 +2908,7 @@ async def submit_it_declaration(
     try:
         from app.services.it_declaration_service import ITDeclarationService
         
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        validate_business_access(business_id, current_user, db)
         it_declaration_service = ITDeclarationService(db)
         
         result = it_declaration_service.submit_declaration(
@@ -2873,6 +2933,7 @@ async def submit_it_declaration(
 
 @router.get("/itDeclarations-limits")
 async def get_deduction_limits(
+    business_id: int,
     financial_year: str = Query(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
@@ -2881,6 +2942,7 @@ async def get_deduction_limits(
     try:
         from app.services.it_declaration_service import ITDeclarationService
         
+        validate_business_access(business_id, current_user, db)
         it_declaration_service = ITDeclarationService(db)
         
         limits = it_declaration_service.get_deduction_limits(financial_year)
@@ -2895,6 +2957,7 @@ async def get_deduction_limits(
 
 @router.get("/itDeclarations-export-csv")
 async def export_it_declarations_csv(
+    business_id: int,
     financial_year: Optional[str] = Query(None),
     employee_id: Optional[int] = Query(None),
     status: Optional[str] = Query(None),
@@ -2907,8 +2970,7 @@ async def export_it_declarations_csv(
         from app.services.it_declaration_service import ITDeclarationService
         from fastapi.responses import Response
         
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        validate_business_access(business_id, current_user, db)
         it_declaration_service = ITDeclarationService(db)
         
         csv_content = it_declaration_service.export_declarations_csv(
@@ -2938,6 +3000,7 @@ async def export_it_declarations_csv(
 
 @router.get("/tdschallans", response_model=List[TDSChallansResponse])
 async def get_tds_challans(
+    business_id: int,
     payment_date_from: Optional[date] = Query(None),
     payment_date_to: Optional[date] = Query(None),
     db: Session = Depends(get_db),
@@ -2954,9 +3017,7 @@ async def get_tds_challans(
     **Note:** This is a legacy endpoint. Use /tdschallans/load for production.
     """
     try:
-        # Get business ID from current user to verify access
-        business_id = get_user_business_id(current_user, db)
-        
+        validate_business_access(business_id, current_user, db)
         # Return empty list for mock endpoint - real data should use /tdschallans/load
         return []
     
@@ -2980,6 +3041,7 @@ class TDSChallanRequest(BaseModel):
 
 @router.post("/tdschallans", response_model=TDSChallansResponse)
 async def create_tds_challan(
+    business_id: int,
     challan_data: TDSChallanRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
@@ -2995,9 +3057,7 @@ async def create_tds_challan(
     **Note:** This is a legacy endpoint. Use /tdschallans/save-month for production.
     """
     try:
-        # Get business ID from current user to verify access
-        business_id = get_user_business_id(current_user, db)
-        
+        validate_business_access(business_id, current_user, db)
         # Return error - use /tdschallans/save-month instead
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -3015,6 +3075,7 @@ async def create_tds_challan(
 
 @router.put("/tdschallans/{challan_id}", response_model=TDSChallansResponse)
 async def update_tds_challan(
+    business_id: int,
     challan_id: int,
     challan_data: TDSChallanRequest,
     db: Session = Depends(get_db),
@@ -3031,8 +3092,7 @@ async def update_tds_challan(
     **Note:** This is a legacy endpoint. Use /tdschallans/save-month for production.
     """
     try:
-        # Get business ID from current user to verify access
-        business_id = get_user_business_id(current_user, db)
+        validate_business_access(business_id, current_user, db)
         
         # Return error - use /tdschallans/save-month instead
         raise HTTPException(
@@ -3051,6 +3111,7 @@ async def update_tds_challan(
 
 @router.delete("/tdschallans/{challan_id}", response_model=Dict[str, str])
 async def delete_tds_challan(
+    business_id: int,
     challan_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
@@ -3065,8 +3126,7 @@ async def delete_tds_challan(
     **Note:** This is a legacy endpoint. Use /tdschallans/month/{month} DELETE for production.
     """
     try:
-        # Get business ID from current user to verify access
-        business_id = get_user_business_id(current_user, db)
+        validate_business_access(business_id, current_user, db)
         
         # Return error - use DELETE /tdschallans/month/{month} instead
         raise HTTPException(
@@ -3100,13 +3160,19 @@ class TDSChallanSaveRequest(BaseModel):
 
 
 @router.get("/tdschallans/test-simple")
-async def test_simple_endpoint():
+async def test_simple_endpoint(
+    business_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_admin)
+):
     """Simple test endpoint"""
+    validate_business_access(business_id, current_user, db)
     return {"message": "TDS Challans API is working", "status": "ok"}
 
 
 @router.get("/tdschallans/load", response_model=Dict[str, Any])
 async def load_tds_challans_for_year(
+    business_id: int,
     financial_year: str = Query(..., description="Financial year in format '2024-25'"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
@@ -3120,9 +3186,7 @@ async def load_tds_challans_for_year(
     - Empty entries for months without data
     """
     try:
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
-        
+        validate_business_access(business_id, current_user, db)
         # Use service layer
         service = TDSChallanService(db)
         result = service.get_challans_by_financial_year(
@@ -3145,6 +3209,7 @@ async def load_tds_challans_for_year(
 
 @router.post("/tdschallans/save-month", response_model=Dict[str, Any])
 async def save_tds_challan_month(
+    business_id: int,
     challan_data: TDSChallanSaveRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
@@ -3158,8 +3223,7 @@ async def save_tds_challan_month(
     - Validates date format and business rules
     """
     try:
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        validate_business_access(business_id, current_user, db)
         created_by = current_user.id
         
         # Use service layer
@@ -3190,6 +3254,7 @@ async def save_tds_challan_month(
 
 @router.get("/tdschallans/month/{month}", response_model=Optional[TDSChallanMonthResponse])
 async def get_tds_challan_by_month(
+    business_id: int,
     month: str,
     financial_year: str = Query(..., description="Financial year in format '2024-25'"),
     db: Session = Depends(get_db),
@@ -3204,8 +3269,7 @@ async def get_tds_challan_by_month(
     - Returns null if no data found for the month
     """
     try:
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        validate_business_access(business_id, current_user, db)
         # Use service layer
         service = TDSChallanService(db)
         result = service.get_challan_by_month(
@@ -3236,6 +3300,7 @@ async def get_tds_challan_by_month(
 
 @router.delete("/tdschallans/month/{month}", response_model=Dict[str, Any])
 async def delete_tds_challan_by_month(
+    business_id: int,
     month: str,
     financial_year: str = Query(..., description="Financial year in format '2024-25'"),
     db: Session = Depends(get_db),
@@ -3250,8 +3315,7 @@ async def delete_tds_challan_by_month(
     - Returns confirmation message
     """
     try:
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        validate_business_access(business_id, current_user, db)
         # Use service layer
         service = TDSChallanService(db)
         result = service.delete_challan_month(
@@ -3276,6 +3340,7 @@ async def delete_tds_challan_by_month(
 
 @router.get("/tdschallans/summary", response_model=Dict[str, Any])
 async def get_tds_challans_summary(
+    business_id: int,
     financial_year: str = Query(..., description="Financial year in format '2024-25'"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
@@ -3289,8 +3354,7 @@ async def get_tds_challans_summary(
     - Completion percentage
     """
     try:
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        validate_business_access(business_id, current_user, db)
         
         # Use service layer
         service = TDSChallanService(db)
@@ -3310,6 +3374,7 @@ async def get_tds_challans_summary(
 
 @router.get("/tdsreturns", response_model=List[TDSReturnsResponse])
 async def get_tds_returns(
+    business_id: int,
     financial_year: Optional[str] = Query(None),
     quarter: Optional[str] = Query(None),
     db: Session = Depends(get_db),
@@ -3326,9 +3391,7 @@ async def get_tds_returns(
     **Note:** This is a legacy endpoint. Use /tdsreturns/load for production.
     """
     try:
-        # Get business ID from current user to verify access
-        business_id = get_user_business_id(current_user, db)
-        
+        validate_business_access(business_id, current_user, db)
         # Return empty list for mock endpoint - real data should use /tdsreturns/load
         return []
     
@@ -3352,6 +3415,7 @@ class TDSReturnRequest(BaseModel):
 
 @router.post("/tdsreturns", response_model=TDSReturnsResponse)
 async def create_tds_return(
+    business_id: int,
     return_data: TDSReturnRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
@@ -3367,9 +3431,7 @@ async def create_tds_return(
     **Note:** This is a legacy endpoint. Use /tdsreturns/save-quarter for production.
     """
     try:
-        # Get business ID from current user to verify access
-        business_id = get_user_business_id(current_user, db)
-        
+        validate_business_access(business_id, current_user, db)
         # Return error - use /tdsreturns/save-quarter instead
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -3387,6 +3449,7 @@ async def create_tds_return(
 
 @router.put("/tdsreturns/{return_id}", response_model=TDSReturnsResponse)
 async def update_tds_return(
+    business_id: int,
     return_id: int,
     return_data: TDSReturnRequest,
     db: Session = Depends(get_db),
@@ -3403,9 +3466,7 @@ async def update_tds_return(
     **Note:** This is a legacy endpoint. Use /tdsreturns/save-quarter for production.
     """
     try:
-        # Get business ID from current user to verify access
-        business_id = get_user_business_id(current_user, db)
-        
+        validate_business_access(business_id, current_user, db)
         # Return error - use /tdsreturns/save-quarter instead
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -3423,6 +3484,7 @@ async def update_tds_return(
 
 @router.delete("/tdsreturns/{return_id}", response_model=Dict[str, str])
 async def delete_tds_return(
+    business_id: int,
     return_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
@@ -3437,9 +3499,7 @@ async def delete_tds_return(
     **Note:** This is a legacy endpoint. Use DELETE /tdsreturns/quarter/{quarter} for production.
     """
     try:
-        # Get business ID from current user to verify access
-        business_id = get_user_business_id(current_user, db)
-        
+        validate_business_access(business_id, current_user, db)
         # Return error - use DELETE /tdsreturns/quarter/{quarter} instead
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -3490,6 +3550,7 @@ class TDSReturnSaveRequest(BaseModel):
 
 @router.get("/tdsreturns/load", response_model=TDSReturnYearResponse)
 async def load_tds_returns_for_year(
+    business_id: int,
     financial_year: str = Query(..., description="Financial year in format '2024-25'"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
@@ -3503,9 +3564,7 @@ async def load_tds_returns_for_year(
     - Empty entries for quarters without data
     """
     try:
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
-        
+        validate_business_access(business_id, current_user, db)
         # Use service layer
         service = TDSReturnService(db)
         result = service.get_returns_by_financial_year(
@@ -3543,6 +3602,7 @@ async def load_tds_returns_for_year(
 
 @router.post("/tdsreturns/save-quarter", response_model=Dict[str, Any])
 async def save_tds_return_quarter(
+    business_id: int,
     return_data: TDSReturnSaveRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
@@ -3556,10 +3616,8 @@ async def save_tds_return_quarter(
     - Creates or updates existing record
     """
     try:
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        validate_business_access(business_id, current_user, db)
         created_by = current_user.id
-        
         # Use service layer
         service = TDSReturnService(db)
         result = service.save_return_quarter(
@@ -3588,6 +3646,7 @@ async def save_tds_return_quarter(
 
 @router.get("/tdsreturns/quarter/{quarter}", response_model=Optional[TDSReturnQuarterResponse])
 async def get_tds_return_by_quarter(
+    business_id: int,
     quarter: str,
     financial_year: str = Query(..., description="Financial year in format '2024-25'"),
     db: Session = Depends(get_db),
@@ -3602,9 +3661,7 @@ async def get_tds_return_by_quarter(
     - Returns null if no data found for the quarter
     """
     try:
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
-        
+        validate_business_access(business_id, current_user, db)
         # Use service layer
         service = TDSReturnService(db)
         result = service.get_return_by_quarter(
@@ -3637,6 +3694,7 @@ async def get_tds_return_by_quarter(
 
 @router.delete("/tdsreturns/quarter/{quarter}", response_model=Dict[str, Any])
 async def delete_tds_return_by_quarter(
+    business_id: int,
     quarter: str,
     financial_year: str = Query(..., description="Financial year in format '2024-25'"),
     db: Session = Depends(get_db),
@@ -3651,9 +3709,7 @@ async def delete_tds_return_by_quarter(
     - Returns confirmation message
     """
     try:
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
-        
+        validate_business_access(business_id, current_user, db)
         # Use service layer
         service = TDSReturnService(db)
         result = service.delete_return_quarter(
@@ -3677,13 +3733,18 @@ async def delete_tds_return_by_quarter(
 
 
 @router.get("/tdsreturns/test-simple")
-async def test_simple_tds_endpoint():
-    """Simple test endpoint"""
+async def test_simple_tds_endpoint(
+    business_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_admin)
+):
+    validate_business_access(business_id, current_user, db)
     return {"message": "TDS Returns API is working", "status": "ok"}
 
 
 @router.get("/tdsreturns/summary", response_model=Dict[str, Any])
 async def get_tds_returns_summary(
+    business_id: int,
     financial_year: str = Query(..., description="Financial year in format '2024-25'"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
@@ -3697,9 +3758,7 @@ async def get_tds_returns_summary(
     - Completion percentage and amounts
     """
     try:
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
-        
+        validate_business_access(business_id, current_user, db)
         # Use service layer
         service = TDSReturnService(db)
         result = service.get_returns_summary(
@@ -3718,6 +3777,7 @@ async def get_tds_returns_summary(
 
 @router.get("/tdsreturns/download/{quarter}")
 async def download_tds_return_receipt(
+    business_id: int,
     quarter: str,
     financial_year: str = Query(..., description="Financial year in format '2024-25'"),
     db: Session = Depends(get_db),
@@ -3735,8 +3795,7 @@ async def download_tds_return_receipt(
         from fastapi.responses import StreamingResponse
         import io
         
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        validate_business_access(business_id, current_user, db)
         
         # Use service layer
         service = TDSReturnService(db)
@@ -3767,6 +3826,7 @@ async def download_tds_return_receipt(
 
 @router.get("", response_model=DataCaptureDashboardResponse)
 async def get_datacapture_dashboard(
+    business_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -3779,8 +3839,7 @@ async def get_datacapture_dashboard(
     - Available templates
     """
     try:
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        validate_business_access(business_id, current_user, db)
         # Mock data capture data
         datacapture_data = {
             "statistics": {
@@ -3828,6 +3887,7 @@ async def get_datacapture_dashboard(
 
 @router.post("/bulk-import", response_model=BulkImportResponse)
 async def bulk_import_data(
+    business_id: int,
     import_request: BulkImportRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
@@ -3841,8 +3901,7 @@ async def bulk_import_data(
     - Salary data import
     """
     try:
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        validate_business_access(business_id, current_user, db)
         # Mock bulk import processing
         import_result = {
             "import_id": f"import_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
@@ -3869,6 +3928,7 @@ async def bulk_import_data(
 
 @router.get("/extradays-employees", response_model=List[ExtraDaysEmployeeResponse])
 async def get_extradays_employees(
+    business_id: int,
     month: str = Query("AUG-2025", description="Month in format 'AUG-2025'"),
     business_unit: Optional[str] = Query(None),
     location: Optional[str] = Query(None),
@@ -3892,8 +3952,7 @@ async def get_extradays_employees(
     try:
         from app.services.extra_days_service import ExtraDaysService
         
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        validate_business_access(business_id, current_user, db)
         # Use service layer
         service = ExtraDaysService(db)
         employees = service.get_employees_with_extra_days(
@@ -3919,6 +3978,7 @@ async def get_extradays_employees(
 
 @router.get("/extradays-filters", response_model=ExtraDaysFiltersResponse)
 async def get_extradays_filters(
+    business_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -3932,8 +3992,7 @@ async def get_extradays_filters(
     try:
         from app.services.extra_days_service import ExtraDaysService
         
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        validate_business_access(business_id, current_user, db)
         # Use service layer
         service = ExtraDaysService(db)
         filters = service.get_filter_options(None, current_user=current_user)
@@ -3949,6 +4008,7 @@ async def get_extradays_filters(
 
 @router.post("/extradays-update", response_model=Dict[str, str])
 async def update_extradays_employee(
+    business_id: int,
     update_data: ExtraDaysUpdateRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
@@ -3963,9 +4023,7 @@ async def update_extradays_employee(
     """
     try:
         from app.services.extra_days_service import ExtraDaysService
-        
-        # Don't extract business_id from current_user - let the service handle business context
-        
+        validate_business_access(business_id, current_user, db)
         # Use service layer
         service = ExtraDaysService(db)
         result = service.update_employee_extra_days(
@@ -3988,6 +4046,7 @@ async def update_extradays_employee(
 
 @router.get("/extradays-search", response_model=List[ExtraDaysSearchResponse])
 async def search_extradays_employees(
+    business_id: int,
     search: str = Query(..., description="Search term for employee name"),
     limit: int = Query(5, ge=1, le=10),
     db: Session = Depends(get_db),
@@ -4003,8 +4062,7 @@ async def search_extradays_employees(
     try:
         from app.services.extra_days_service import ExtraDaysService
         
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        validate_business_access(business_id, current_user, db)
         # Use service layer
         service = ExtraDaysService(db)
         employees = service.search_employees(search, business_id, limit)
@@ -4020,6 +4078,7 @@ async def search_extradays_employees(
 
 @router.get("/extradays-export/{employee_id}", response_model=ExtraDaysExportResponse)
 async def export_extradays_employee_data(
+    business_id: int,
     employee_id: int,
     month: str = Query("AUG-2025", description="Month in format 'AUG-2025'"),
     extra: float = Query(0.0),
@@ -4035,8 +4094,7 @@ async def export_extradays_employee_data(
     try:
         from app.services.extra_days_service import ExtraDaysService
         
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        validate_business_access(business_id, current_user, db)
         # Use service layer
         service = ExtraDaysService(db)
         export_data = service.export_employee_data(
@@ -4062,6 +4120,7 @@ async def export_extradays_employee_data(
 
 @router.get("/extradays-export-all", response_model=ExtraDaysExportAllResponse)
 async def export_all_extradays_data(
+    business_id: int,
     month: str = Query("AUG-2025", description="Month in format 'AUG-2025'"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
@@ -4072,8 +4131,7 @@ async def export_all_extradays_data(
     try:
         from app.services.extra_days_service import ExtraDaysService
         
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        validate_business_access(business_id, current_user, db)
         # Use service layer
         service = ExtraDaysService(db)
         export_data = service.export_all_employees_data(month, business_id)
@@ -4089,6 +4147,7 @@ async def export_all_extradays_data(
 
 @router.get("/extradays-export-csv")
 async def export_extradays_csv(
+    business_id: int,
     month: str = Query("AUG-2025", description="Month in format 'AUG-2025'"),
     location: Optional[str] = Query(None),
     department: Optional[str] = Query(None),
@@ -4103,8 +4162,7 @@ async def export_extradays_csv(
         from app.services.extra_days_service import ExtraDaysService
         import io
         
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        validate_business_access(business_id, current_user, db)
         # Use service layer
         service = ExtraDaysService(db)
         csv_content = service.generate_csv_export(
@@ -4115,10 +4173,13 @@ async def export_extradays_csv(
         )
         
         # Return as streaming response
+        filename_month = month.replace('-', '_') if month else datetime.now().strftime('%Y%m%d')
+        if csv_content is None:
+            csv_content = ""
         return StreamingResponse(
             io.BytesIO(csv_content.encode('utf-8')),
             media_type="text/csv",
-            headers={"Content-Disposition": f"attachment; filename=extra_days_{month.replace('-', '_')}.csv"}
+            headers={"Content-Disposition": f"attachment; filename=extra_days_{filename_month}.csv"}
         )
     
     except Exception as e:
@@ -4130,6 +4191,7 @@ async def export_extradays_csv(
 
 @router.post("/extradays-import", response_model=ExtraDaysImportResponse)
 async def import_extradays_data(
+    business_id: int,
     month: str = Query("AUG-2025", description="Month in format 'AUG-2025'"),
     overwrite_existing: bool = Query(False),
     csv_data: str = Body(..., media_type="text/plain"),
@@ -4146,8 +4208,7 @@ async def import_extradays_data(
     try:
         from app.services.extra_days_service import ExtraDaysService
         
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        validate_business_access(business_id, current_user, db)
         # Use service layer
         service = ExtraDaysService(db)
         result = service.import_csv_data(
@@ -4182,6 +4243,7 @@ class IncomeTaxTDSEmployeeResponse(BaseModel):
 
 @router.get("/incometaxtds-employees", response_model=List[IncomeTaxTDSEmployeeResponse])
 async def get_incometaxtds_employees(
+    business_id: int,
     month: str = Query("AUG-2025", description="Month in format 'AUG-2025'"),
     business_unit: Optional[str] = Query(None),
     location: Optional[str] = Query(None),
@@ -4203,9 +4265,7 @@ async def get_incometaxtds_employees(
     - Supports pagination
     """
     try:
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
-        
+        validate_business_access(business_id, current_user, db)
         # Use service layer
         service = IncomeTaxTDSService(db)
         employees = service.get_incometaxtds_employees(
@@ -4242,6 +4302,7 @@ async def get_incometaxtds_employees(
 
 @router.get("/incometaxtds-filters", response_model=Dict[str, List[str]])
 async def get_incometaxtds_filters(
+    business_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -4253,9 +4314,7 @@ async def get_incometaxtds_filters(
     - Used for dropdown filters in income tax TDS frontend
     """
     try:
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
-        
+        validate_business_access(business_id, current_user, db)
         # Use service layer
         service = IncomeTaxTDSService(db)
         filters = service.get_incometaxtds_filters(business_id=business_id, current_user=current_user)
@@ -4278,6 +4337,7 @@ class IncomeTaxTDSUpdateRequest(BaseModel):
 
 @router.post("/incometaxtds-update", response_model=Dict[str, str])
 async def update_incometaxtds_employee(
+    business_id: int,
     update_data: IncomeTaxTDSUpdateRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
@@ -4290,8 +4350,7 @@ async def update_incometaxtds_employee(
     - Month-specific data
     """
     try:
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        validate_business_access(business_id, current_user, db)
         # Use service layer
         service = IncomeTaxTDSService(db)
         result = service.update_employee_tds(
@@ -4318,6 +4377,7 @@ async def update_incometaxtds_employee(
 
 @router.delete("/incometaxtds-delete/{employee_code}")
 async def delete_incometaxtds_employee(
+    business_id: int,
     employee_code: str,
     month: str = Query("AUG-2025", description="Month in format 'AUG-2025'"),
     db: Session = Depends(get_db),
@@ -4330,8 +4390,7 @@ async def delete_incometaxtds_employee(
     - Employee TDS record for specific month
     """
     try:
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        validate_business_access(business_id, current_user, db)
         # Use service layer
         service = IncomeTaxTDSService(db)
         result = service.delete_employee_tds(
@@ -4375,6 +4434,7 @@ class CopyFromPreviousPeriodTDSRequest(BaseModel):
 
 @router.post("/incometaxtds-copy-previous", response_model=Dict[str, Any])
 async def copy_incometaxtds_from_previous_period(
+    business_id: int,
     copy_data: CopyFromPreviousPeriodTDSRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
@@ -4387,8 +4447,7 @@ async def copy_incometaxtds_from_previous_period(
     - Applies to all employees with existing TDS data
     """
     try:
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        validate_business_access(business_id, current_user, db)
         # Use service layer
         service = IncomeTaxTDSService(db)
         result = service.copy_from_previous_period(
@@ -4415,6 +4474,7 @@ async def copy_incometaxtds_from_previous_period(
 
 @router.get("/incometaxtds-search")
 async def search_incometaxtds_employees(
+    business_id: int,
     search: str = Query(..., description="Search term for employee name"),
     limit: int = Query(5, ge=1, le=10),
     db: Session = Depends(get_db),
@@ -4428,8 +4488,7 @@ async def search_incometaxtds_employees(
     - Used for autocomplete dropdown
     """
     try:
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        validate_business_access(business_id, current_user, db)
         # Use service layer
         service = IncomeTaxTDSService(db)
         employees = service.search_employees(
@@ -4449,6 +4508,7 @@ async def search_incometaxtds_employees(
 
 @router.get("/incometaxtds-export/{employee_code}")
 async def export_incometaxtds_employee_data(
+    business_id: int,
     employee_code: str,
     month: str = Query("AUG-2025", description="Month in format 'AUG-2025'"),
     tds_amount: float = Query(0.0, description="TDS amount"),
@@ -4462,8 +4522,7 @@ async def export_incometaxtds_employee_data(
         from fastapi.responses import StreamingResponse
         import io
         
-        # Get business ID from current user
-        business_id = get_user_business_id(current_user, db)
+        validate_business_access(business_id, current_user, db)
         # Use service layer
         service = IncomeTaxTDSService(db)
         export_data = service.export_employee_data(

@@ -5,7 +5,8 @@ from enum import Enum
 
 class UnitTypeEnum(str, Enum):
     PAID_DAYS = "Paid Days"
-    CASUAL_DAYS = "Casual Days"
+    FIXED = "Fixed"
+    MONTHLY = "Monthly"
 
 
 class SalaryComponentBase(BaseModel):

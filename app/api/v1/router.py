@@ -9,7 +9,7 @@ from app.core.database import get_db
 from app.api.v1.deps import get_current_admin, get_current_superadmin, get_current_user
 from app.models.user import User
 
-from .endpoints import auth, superadmin, health, files, registration, dev, business, employees, allemployees, dashboard, onboarding, separation, attendance, datacapture, bulkupdate, requests, hrmanagement, payroll, reports, setup_dashboard, crm, profile, master_setup, salary_setup, calendar, project_management, notes, subscriptions, packages, domain, purchase_transaction, documents, help, support, system_stats, preferences, todo, contact_inquiry, public_location, password_reset
+from .endpoints import auth, superadmin, health, files, registration, dev, business, employees, allemployees, dashboard, onboarding, separation, attendance, datacapture, bulkupdate, requests, hrmanagement, payroll, reports, setup_dashboard, crm, profile, master_setup, master_policies, salary_setup, calendar, project_management, notes, subscriptions, packages, domain, purchase_transaction, documents, help, support, system_stats, preferences, todo, contact_inquiry, public_location, password_reset
 
 from app.api.v1.setup.mastersetup.workflows import router as workflows_router
 from app.api.v1.setup.mastersetup.business_unit_files import router as business_unit_files_router
@@ -96,6 +96,11 @@ api_router.include_router(
 
 api_router.include_router(
     master_setup.router,
+    tags=["Master Setup"]
+)
+
+api_router.include_router(
+    master_policies.router,
     tags=["Master Setup"]
 )
 

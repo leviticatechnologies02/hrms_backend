@@ -3,7 +3,7 @@ Data Capture Models
 Employee data capture and management data models
 """
 
-from sqlalchemy import Column, Integer, String, DateTime, Boolean, Date, ForeignKey, Text, Numeric, Enum
+from sqlalchemy import Column, Integer, String, DateTime, Boolean, Date, ForeignKey, Text, Numeric, Enum, Index
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.models.base import Base
@@ -541,3 +541,18 @@ class TravelRequest(Base):
     employee = relationship("Employee")
     approver = relationship("User", foreign_keys=[approved_by])
     creator = relationship("User", foreign_keys=[created_by])
+
+
+# Indexes for tenant isolation
+Index("idx_salary_variables_business_id", SalaryVariable.business_id)
+Index("idx_salary_units_business_id", SalaryUnit.business_id)
+Index("idx_employee_salary_units_business_id", EmployeeSalaryUnit.business_id)
+Index("idx_employee_deductions_business_id", EmployeeDeduction.business_id)
+Index("idx_income_tax_tds_business_id", IncomeTaxTDS.business_id)
+Index("idx_extra_days_business_id", ExtraDay.business_id)
+Index("idx_extra_hours_business_id", ExtraHour.business_id)
+Index("idx_employee_loans_business_id", EmployeeLoan.business_id)
+Index("idx_it_declarations_business_id", ITDeclaration.business_id)
+Index("idx_tds_challans_business_id", TDSChallan.business_id)
+Index("idx_tds_returns_business_id", TDSReturn.business_id)
+Index("idx_travel_requests_business_id", TravelRequest.business_id)

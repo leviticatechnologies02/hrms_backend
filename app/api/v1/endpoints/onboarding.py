@@ -7,7 +7,7 @@ Onboarding API Endpoints - Multi-tenant (business_id) refactor
 - Kept existing schemas and response models intact
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Path
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Path, Body
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, desc, inspect as sa_inspect
 from sqlalchemy.exc import IntegrityError
@@ -40,14 +40,15 @@ from app.schemas.onboarding_additional import (
     DocumentRequirementUpdateRequest, FieldRequirementUpdateRequest,
     BulkSendRequest, SendFormRequest, StepDataRequest,
     OTPSendRequest, OTPVerifyRequest, DocumentUploadRequest,
-    FormCreateRequest, FinalizeAndSendRequest, AttachPoliciesResponse
+    FormCreateRequest, FinalizeAndSendRequest, AttachPoliciesResponse,
+    SkipOfferLetterRequest, SkipOfferLetterResponse
 )
 from app.schemas.credits import CreditPurchaseRequest
 from app.services.onboarding_service import OnboardingService
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
+router = APIRouter(tags=["Onboarding"])  # ensure router has Onboarding tag by default
 
 
 # ---------------------------------------------------------------------------
@@ -1856,6 +1857,32 @@ async def get_form_policies(
                 "created_at": policy.created_at.isoformat() if policy.created_at else None
             })
         return policy_list
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+# ---------------------------------------------------------------------------
+# Create/update onboarding while skipping offer letter
+# ---------------------------------------------------------------------------
+@router.post("/{form_id}/skip-offer-letter", response_model=SkipOfferLetterResponse, summary="Create onboarding without offer letter", include_in_schema=True, operation_id="create_onboarding_skip_offer_letter_v1")
+async def create_onboarding_skip_offer_letter(
+    business_id: int = Path(..., description="Business ID"),
+    form_id: int = Path(..., description="Onboarding form ID"),
+    skip_data: SkipOfferLetterRequest = Body(..., description="Payload to create/update onboarding while skipping offer letter"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_admin)
+):
+    """Create or update onboarding form while skipping offer letter generation.
+
+    Validates business and policy ownership, attaches policies and saves form without generating an offer letter.
+    """
+    try:
+        validate_business_access(business_id, current_user, db)
+        service = OnboardingService(db)
+        result = service.create_or_update_onboarding_skip_offer_letter(form_id, skip_data, business_id, current_user.id)
+        return result
     except HTTPException:
         raise
     except Exception as e:

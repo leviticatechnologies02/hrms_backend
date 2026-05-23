@@ -1,4 +1,172 @@
 """
+Additional onboarding request/response schemas
+Minimal definitions to restore imports used by onboarding endpoints/services.
+"""
+from pydantic import BaseModel, EmailStr, Field
+from typing import List, Optional, Dict, Any
+from datetime import date
+
+
+class SalaryCalculationRequest(BaseModel):
+    gross_salary: Optional[float] = None
+    salary_structure_id: Optional[int] = None
+    employee_id: Optional[int] = None
+    options: Optional[Dict[str, Any]] = None
+
+
+class OfferLetterGenerateRequest(BaseModel):
+    template_id: Optional[int] = None
+    gross_salary: Optional[float] = None
+    salary_structure_id: Optional[int] = None
+    salary_options: Optional[Dict[str, Any]] = None
+    position_title: Optional[str] = None
+    department: Optional[str] = None
+    location: Optional[str] = None
+    basic_salary: Optional[str] = None
+    ctc: Optional[str] = None
+    joining_date: Optional[date] = None
+    offer_valid_until: Optional[date] = None
+
+
+class PolicyAttachmentRequest(BaseModel):
+    policies: List[int] = []
+
+
+class DocumentRequirementUpdateRequest(BaseModel):
+    document_type: str
+    is_mandatory: bool = False
+    display_order: Optional[int] = None
+
+
+class FieldRequirementUpdateRequest(BaseModel):
+    field_name: str
+    is_mandatory: bool = False
+
+
+class BulkSendRequest(BaseModel):
+    form_ids: List[int] = []
+    business_id: Optional[int] = None
+
+
+class SendFormRequest(BaseModel):
+    form_id: int
+    recipient_email: Optional[EmailStr] = None
+    recipient_mobile: Optional[str] = None
+
+
+class StepDataRequest(BaseModel):
+    step_number: int
+    data: Dict[str, Any] = {}
+
+
+class OTPSendRequest(BaseModel):
+    mobile: str
+
+
+class OTPVerifyRequest(BaseModel):
+    mobile: str
+    otp: str
+
+
+class DocumentUploadRequest(BaseModel):
+    document_type: str
+    file_path: str
+    file_size: Optional[int] = None
+
+
+class FormCreateRequest(BaseModel):
+    candidate_name: str
+    candidate_email: EmailStr
+    candidate_mobile: str
+    verify_mobile: bool = True
+    verify_pan: bool = False
+    verify_bank: bool = False
+    verify_aadhaar: bool = False
+    notes: Optional[str] = None
+    policies: List[int] = []
+
+
+class FinalizeAndSendRequest(BaseModel):
+    form_id: int
+    send_to_email: Optional[EmailStr] = None
+
+
+class AttachPoliciesResponse(BaseModel):
+    success: bool
+    attached_ids: List[int] = []
+
+
+class SkipOfferLetterRequest(BaseModel):
+    candidate_name: str
+    candidate_email: EmailStr
+    candidate_mobile: str
+    verify_mobile: bool = True
+    verify_pan: bool = False
+    verify_bank: bool = False
+    verify_aadhaar: bool = False
+    notes: Optional[str] = None
+    policies: List[int] = []
+    offer_letter: Optional[Dict[str, Any]] = None
+    salary_options: Optional[Dict[str, Any]] = None
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "candidate_name": "ASASA",
+                "candidate_email": "chandupatel.1434@gmail.com",
+                "candidate_mobile": "9494231334",
+                "notes": "",
+                "verify_mobile": True,
+                "verify_pan": False,
+                "verify_bank": False,
+                "verify_aadhaar": False,
+                "policies": [1, 2, 3],
+                "offer_letter": None,
+                "salary_options": None
+            }
+        }
+
+
+class SkipOfferLetterResponse(BaseModel):
+    success: bool
+    message: Optional[str] = None
+    form_id: Optional[int] = None
+    business_id: Optional[int] = None
+    policies: List[int] = []
+    offer_letter_skipped: bool = True
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "success": True,
+                "message": "Onboarding created successfully without offer letter",
+                "form_id": 2,
+                "business_id": 1,
+                "policies": [1, 2, 3],
+                "offer_letter_skipped": True
+            }
+        }
+
+
+__all__ = [
+    "SalaryCalculationRequest",
+    "OfferLetterGenerateRequest",
+    "PolicyAttachmentRequest",
+    "DocumentRequirementUpdateRequest",
+    "FieldRequirementUpdateRequest",
+    "BulkSendRequest",
+    "SendFormRequest",
+    "StepDataRequest",
+    "OTPSendRequest",
+    "OTPVerifyRequest",
+    "DocumentUploadRequest",
+    "FormCreateRequest",
+    "FinalizeAndSendRequest",
+    "AttachPoliciesResponse",
+    "SkipOfferLetterRequest",
+    "SkipOfferLetterResponse",
+]
+"""
 Additional Pydantic schemas for Onboarding endpoints
 Replaces dict with proper typed schemas for Swagger/OpenAPI documentation
 """
@@ -503,5 +671,59 @@ class FinalizeAndSendRequest(BaseModel):
                 "custom_message": "Welcome aboard!",
                 "include_offer_letter": True,
                 "include_policies": True
+            }
+        }
+
+
+class SkipOfferLetterRequest(BaseModel):
+    """Schema for creating/updating an onboarding form while skipping offer letter generation"""
+
+    candidate_name: str = Field(..., max_length=200, example="ASASA")
+    candidate_email: EmailStr = Field(..., example="chandupatel.1434@gmail.com")
+    candidate_mobile: str = Field(..., max_length=20, example="9494231334")
+    notes: Optional[str] = None
+    verify_mobile: Optional[bool] = True
+    verify_pan: Optional[bool] = False
+    verify_bank: Optional[bool] = False
+    verify_aadhaar: Optional[bool] = False
+    policies: Optional[List[int]] = Field(default_factory=list, example=[1,2,3])
+    offer_letter: Optional[dict] = None
+    salary_options: Optional[dict] = None
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "candidate_name": "ASASA",
+                "candidate_email": "chandupatel.1434@gmail.com",
+                "candidate_mobile": "9494231334",
+                "notes": "",
+                "verify_mobile": True,
+                "verify_pan": False,
+                "verify_bank": False,
+                "verify_aadhaar": False,
+                "policies": [1,2,3],
+                "offer_letter": None,
+                "salary_options": None
+            }
+        }
+
+
+class SkipOfferLetterResponse(BaseModel):
+    success: bool = True
+    message: str
+    form_id: int
+    business_id: int
+    policies: List[int]
+    offer_letter_skipped: bool = True
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "success": True,
+                "message": "Onboarding created successfully without offer letter",
+                "form_id": 2,
+                "business_id": 1,
+                "policies": [1,2,3],
+                "offer_letter_skipped": True
             }
         }

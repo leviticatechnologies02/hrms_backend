@@ -19,6 +19,11 @@ from ..schemas.onboarding import (
     CreateOnboardingSchema, UpdateOnboardingSchema, BulkOnboardingCreate,
     FormSubmissionCreate, OnboardingSettingsUpdate
 )
+from ..schemas.onboarding_additional import SkipOfferLetterRequest
+
+from app.models.master_policy import MasterPolicy, FormPolicyMapping
+from app.models.onboarding import OnboardingPolicy
+from app.models.business import Business
 
 
 class OnboardingService:
@@ -94,6 +99,138 @@ class OnboardingService:
         }
 
         return response
+
+    def create_or_update_onboarding_skip_offer_letter(self, form_id: int, form_data: SkipOfferLetterRequest, business_id: int, user_id: int):
+        """Create or update an onboarding form while skipping offer letter generation.
+
+        If an onboarding form with `form_id` exists for the business, update it; otherwise create a new form.
+        Attach requested policies (validating they belong to the same business).
+        Returns a dict matching SkipOfferLetterResponse.
+        """
+        # Validate business exists
+        business = self.db.query(Business).filter(Business.id == business_id).first()
+        if not business:
+            from fastapi import HTTPException, status
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Business not found")
+
+        # Validate policies
+        requested_policies = getattr(form_data, 'policies', []) or []
+        masters = []
+        if requested_policies:
+            masters = self.db.query(MasterPolicy).filter(MasterPolicy.id.in_(requested_policies), MasterPolicy.business_id == business_id).all()
+            found_ids = {m.id for m in masters}
+            missing = [pid for pid in requested_policies if pid not in found_ids]
+            if missing:
+                from fastapi import HTTPException, status
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Master policies not found or not owned by business: {missing}")
+
+        # Try to fetch existing form
+        form = None
+        if form_id:
+            form = self.onboarding_repo.get(form_id)
+            if form and form.business_id != business_id:
+                from fastapi import HTTPException, status
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Onboarding form not found for this business")
+
+        now = datetime.now()
+        if form:
+            # Update existing form
+            form.candidate_name = form_data.candidate_name
+            form.candidate_email = form_data.candidate_email
+            form.candidate_mobile = form_data.candidate_mobile
+            form.verify_mobile = form_data.verify_mobile
+            form.verify_pan = form_data.verify_pan
+            form.verify_bank = form_data.verify_bank
+            form.verify_aadhaar = form_data.verify_aadhaar
+            form.notes = form_data.notes
+            # Ensure offer_letter and salary_options are not stored on DB-level (properties are placeholders)
+            form.status = OnboardingStatus.SENT
+            form.updated_at = now
+            self.db.commit()
+            self.db.refresh(form)
+            created = False
+        else:
+            # Create new form
+            form_token = str(uuid.uuid4())
+            create_data = {
+                "business_id": business_id,
+                "candidate_name": form_data.candidate_name,
+                "candidate_email": form_data.candidate_email,
+                "candidate_mobile": form_data.candidate_mobile,
+                "form_token": form_token,
+                "status": OnboardingStatus.SENT,
+                "verify_mobile": form_data.verify_mobile,
+                "verify_pan": form_data.verify_pan,
+                "verify_bank": form_data.verify_bank,
+                "verify_aadhaar": form_data.verify_aadhaar,
+                "notes": form_data.notes,
+                "created_by": user_id,
+                "created_at": now
+            }
+            form = self.onboarding_repo.create(create_data)
+            created = True
+
+        # Attach policies: remove existing mappings and onboarding policy records for this form, then add
+        try:
+            # Delete existing onboarding policies for this form (if business column exists)
+            from sqlalchemy import inspect as sa_inspect
+            inspector = sa_inspect(self.db.get_bind())
+            cols = [c.get('name') for c in inspector.get_columns('onboarding_policies')]
+            if 'business_id' in cols:
+                self.db.query(OnboardingPolicy).filter(OnboardingPolicy.form_id == form.id, OnboardingPolicy.business_id == business_id).delete()
+            else:
+                self.db.query(OnboardingPolicy).filter(OnboardingPolicy.form_id == form.id).delete()
+
+            # Delete existing mapping entries
+            cols2 = [c.get('name') for c in inspector.get_columns('form_policy_mapping')]
+            if 'business_id' in cols2:
+                self.db.query(FormPolicyMapping).filter(FormPolicyMapping.form_id == form.id, FormPolicyMapping.business_id == business_id).delete()
+            else:
+                self.db.query(FormPolicyMapping).filter(FormPolicyMapping.form_id == form.id).delete()
+
+            attached_ids = []
+            for i, pid in enumerate(requested_policies):
+                master = next((m for m in masters if m.id == pid), None)
+                if not master:
+                    continue
+                policy_kwargs = dict(
+                    form_id=form.id,
+                    policy_name=master.name or f"Policy {pid}",
+                    policy_content=master.description,
+                    policy_file_path=master.file_path,
+                    requires_acknowledgment=bool(master.requires_acknowledgment),
+                    is_mandatory=bool(master.is_mandatory),
+                    display_order=i,
+                    created_by=user_id,
+                    business_id=business_id
+                )
+                op = OnboardingPolicy(**policy_kwargs)
+                self.db.add(op)
+
+                mapping_kwargs = dict(
+                    form_id=form.id,
+                    policy_id=master.id,
+                    business_id=business_id,
+                    created_by=user_id
+                )
+                mapping = FormPolicyMapping(**mapping_kwargs)
+                self.db.add(mapping)
+                attached_ids.append(master.id)
+
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            from fastapi import HTTPException, status
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to attach policies")
+
+        return {
+            "success": True,
+            "message": "Onboarding created successfully without offer letter" if created else "Onboarding updated successfully without offer letter",
+            "form_id": form.id,
+            "business_id": business_id,
+            "policies": requested_policies,
+            "offer_letter_skipped": True
+        }
     
     def get_onboarding_form(self, form_id: int, business_id: int = None) -> Optional[OnboardingForm]:
         """Get onboarding form by ID"""

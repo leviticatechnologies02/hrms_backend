@@ -54,3 +54,6 @@ __all__ = [
     "BusinessResponse",
     "BusinessSummary",
 ]
+
+# Ensure onboarding_additional submodule is importable as part of the package
+# Note: avoid importing submodules here to prevent circular import problems during reloads

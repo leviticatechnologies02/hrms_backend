@@ -429,6 +429,15 @@ class MasterPolicyResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class MasterPolicyUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    type: Optional[str] = None
+    is_mandatory: Optional[bool] = None
+    requires_acknowledgment: Optional[bool] = None
+    file_path: Optional[str] = None
+
+
 class VisitTypeUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=255)
 

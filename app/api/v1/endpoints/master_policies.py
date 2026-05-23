@@ -3,7 +3,7 @@ POST /api/v1/{business_id}/master/policies
 GET  /api/v1/{business_id}/master/policies
 POST /api/v1/{business_id}/master/policies/upload
 """
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Path
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Path, Query
 from sqlalchemy.orm import Session
 from typing import List
 import os
@@ -13,6 +13,7 @@ from app.api.v1.deps import get_current_admin, get_current_user
 from app.schemas.master_setup import MasterPolicyCreate, MasterPolicyResponse
 from app.services.master_policy_service import MasterPolicyService
 from app.services.file_upload_service import save_upload
+from app.schemas.master_setup import MasterPolicyUpdate
 
 router = APIRouter()
 
@@ -96,3 +97,54 @@ async def upload_policy_file(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+
+
+@router.put("/{business_id}/master/policies/{policy_id}", response_model=MasterPolicyResponse)
+async def update_master_policy(
+    business_id: int = Path(..., description="Business ID"),
+    policy_id: int = Path(..., description="Policy ID"),
+    payload: MasterPolicyUpdate = None,
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_admin)
+):
+    try:
+        # Validate business exists
+        from app.models.business import Business
+        business = db.query(Business).filter(Business.id == business_id).first()
+        if not business:
+            raise HTTPException(status_code=404, detail="Business not found")
+
+        service = MasterPolicyService(db)
+        data = payload.model_dump() if hasattr(payload, 'model_dump') else payload.__dict__
+        policy = service.update_policy(policy_id, business_id, data, updated_by=current_user.id)
+        return policy
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@router.delete("/{business_id}/master/policies/{policy_id}", response_model=dict)
+async def delete_master_policy(
+    business_id: int = Path(..., description="Business ID"),
+    policy_id: int = Path(..., description="Policy ID"),
+    force: bool = Query(False, description="Force delete even if policy is attached to forms"),
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_admin)
+):
+    try:
+        # Validate business exists
+        from app.models.business import Business
+        business = db.query(Business).filter(Business.id == business_id).first()
+        if not business:
+            raise HTTPException(status_code=404, detail="Business not found")
+
+        service = MasterPolicyService(db)
+        service.delete_policy(policy_id, business_id, hard_delete=force)
+        return {"success": True, "message": "Master policy deleted successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))

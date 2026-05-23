@@ -498,24 +498,7 @@ async def get_offer_letters(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-# ---------------------------------------------------------------------------
-# Policy templates (readonly) & form policy attachments (scoped)
-# ---------------------------------------------------------------------------
-@router.get("/policy-templates", response_model=List[dict])
-async def get_policy_templates(
-    business_id: int = Path(...),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_admin)
-):
-    validate_business_access(business_id, current_user, db)
-    try:
-        # Static list (could be pulled from DB in future)
-        return [
-            {"id": 1, "name": "Employee Handbook", "description": "Complete guide", "type": "handbook", "is_mandatory": True},
-            {"id": 2, "name": "Code of Conduct", "description": "Ethics", "type": "conduct", "is_mandatory": True}
-        ]
-    except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+# Policy templates removed: use master/policies endpoints instead
 
 
 @router.post("/{form_id}/attach-policies", response_model=AttachPoliciesResponse)
@@ -1727,29 +1710,7 @@ async def get_offer_letters(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-# ---------------------------------------------------------------------------
-# Policy templates & attachments
-# ---------------------------------------------------------------------------
-@router.get("/policy-templates", response_model=List[dict])
-async def get_policy_templates(
-    business_id: int = Path(..., description="Business ID"),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_admin)
-):
-    try:
-        validate_business_access(business_id, current_user, db)
-        # Static list as before
-        policy_templates = [
-            {"id": 1, "name": "Employee Handbook", "description": "Complete guide to company policies and procedures", "type": "handbook", "is_mandatory": True, "requires_acknowledgment": True, "file_path": "/policies/employee-handbook.pdf"},
-            {"id": 2, "name": "Code of Conduct", "description": "Professional behavior and ethical guidelines", "type": "conduct", "is_mandatory": True, "requires_acknowledgment": True, "file_path": "/policies/code-of-conduct.pdf"},
-            {"id": 3, "name": "IT Security Policy", "description": "Information technology security guidelines and requirements", "type": "it_security", "is_mandatory": True, "requires_acknowledgment": True, "file_path": "/policies/it-security-policy.pdf"},
-            {"id": 4, "name": "Remote Work Policy", "description": "Guidelines for remote work arrangements", "type": "remote_work", "is_mandatory": False, "requires_acknowledgment": True, "file_path": "/policies/remote-work-policy.pdf"},
-            {"id": 5, "name": "Leave Policy", "description": "Annual leave, sick leave, and other time-off policies", "type": "leave", "is_mandatory": True, "requires_acknowledgment": True, "file_path": "/policies/leave-policy.pdf"},
-            {"id": 6, "name": "Health & Safety Policy", "description": "Workplace health and safety guidelines", "type": "health_safety", "is_mandatory": True, "requires_acknowledgment": True, "file_path": "/policies/health-safety-policy.pdf"}
-        ]
-        return policy_templates
-    except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+# Policy templates endpoint removed — master policies should be used
 
 
 @router.post("/{form_id}/attach-policies", response_model=AttachPoliciesResponse)

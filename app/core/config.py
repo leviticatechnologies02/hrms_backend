@@ -110,6 +110,17 @@ class Settings(BaseSettings):
     # Frontend configuration
     FRONTEND_URL: str = "http://localhost:3000"
     VERIFICATION_TOKEN_EXPIRE_HOURS: int = 24
+
+    # Email provider selection - options: 'smtp', 'brevo'
+    EMAIL_PROVIDER: str = os.getenv("EMAIL_PROVIDER", "smtp")
+
+    # Brevo (Sendinblue) configuration
+    BREVO_API_KEY: Optional[str] = os.getenv("BREVO_API_KEY")
+    BREVO_SENDER_EMAIL: Optional[str] = os.getenv("BREVO_SENDER_EMAIL")
+    BREVO_SENDER_NAME: Optional[str] = os.getenv("BREVO_SENDER_NAME")
+
+    def is_brevo_configured(self) -> bool:
+        return bool(self.BREVO_API_KEY and self.BREVO_SENDER_EMAIL)
     
     # CORS settings
     BACKEND_CORS_ORIGINS: Union[str, List[str]] = [

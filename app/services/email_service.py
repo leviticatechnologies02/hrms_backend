@@ -77,23 +77,8 @@ class EmailService:
         Returns:
             True if sent successfully, False otherwise
         """
-        # If configured to use Brevo, use Brevo API path
         provider = getattr(settings, 'EMAIL_PROVIDER', 'smtp') or 'smtp'
-        if provider.lower() == 'brevo':
-            return await self._send_via_brevo(
-                to_email=to_email,
-                subject=subject,
-                html_content=html_content,
-                text_content=text_content,
-                attachments=attachments,
-            )
 
-        # Skip if SMTP not configured
-        if not settings.is_smtp_configured():
-            logger.warning(f"SMTP not configured. Email to {to_email} not sent.")
-            logger.info(f"Subject: {subject}")
-            return False
-        
         # Build email message
         message = MIMEMultipart("alternative")
         message["From"] = f"{settings.SMTP_FROM_NAME} <{settings.SMTP_FROM_EMAIL}>"
@@ -101,14 +86,14 @@ class EmailService:
         message["Subject"] = subject
         message["Message-ID"] = f"<{datetime.utcnow().timestamp()}.{to_email}@{settings.SMTP_HOST}>"
         message["Date"] = datetime.utcnow().strftime("%a, %d %b %Y %H:%M:%S +0000")
-        
+
         # Attach plain text version
         if text_content:
             message.attach(MIMEText(text_content, "plain", "utf-8"))
-        
+
         # Attach HTML version
         message.attach(MIMEText(html_content, "html", "utf-8"))
-        
+
         # Attach files if provided
         if attachments:
             for attachment in attachments:
@@ -124,77 +109,18 @@ class EmailService:
                     logger.info(f"Attached file: {attachment['filename']}")
                 except Exception as e:
                     logger.error(f"Failed to attach file {attachment.get('filename')}: {e}")
-        
-        # Retry loop with exponential backoff
-        for attempt in range(1, max_retries + 1):
-            try:
-                logger.info(f"Sending email to {to_email} (attempt {attempt}/{max_retries})...")
-                
-                # Choose connection method based on settings
-                if settings.SMTP_USE_TLS:
-                    # SSL/TLS (port 465)
-                    await aiosmtplib.send(
-                        message,
-                        hostname=settings.SMTP_HOST,
-                        port=settings.SMTP_PORT,
-                        username=settings.SMTP_USERNAME,
-                        password=settings.SMTP_PASSWORD,
-                        use_tls=True,
-                        timeout=settings.SMTP_TIMEOUT,
-                    )
-                elif settings.SMTP_USE_STARTTLS:
-                    # STARTTLS (port 587)
-                    await aiosmtplib.send(
-                        message,
-                        hostname=settings.SMTP_HOST,
-                        port=settings.SMTP_PORT,
-                        username=settings.SMTP_USERNAME,
-                        password=settings.SMTP_PASSWORD,
-                        start_tls=True,
-                        timeout=settings.SMTP_TIMEOUT,
-                    )
-                else:
-                    # Plain SMTP (port 25, 2525)
-                    await aiosmtplib.send(
-                        message,
-                        hostname=settings.SMTP_HOST,
-                        port=settings.SMTP_PORT,
-                        username=settings.SMTP_USERNAME,
-                        password=settings.SMTP_PASSWORD,
-                        timeout=settings.SMTP_TIMEOUT,
-                    )
-                
-                logger.info(f"Email sent successfully to {to_email}")
-                return True
-                
-            except aiosmtplib.SMTPAuthenticationError as e:
-                logger.error(f"SMTP authentication failed: {e}")
-                return False  # Don't retry auth errors
-                
-            except aiosmtplib.SMTPRecipientsRefused as e:
-                logger.error(f"Recipient refused: {to_email} - {e}")
-                return False  # Don't retry invalid recipients
-                
-            except aiosmtplib.SMTPException as e:
-                logger.error(f"SMTP error (attempt {attempt}/{max_retries}): {e}")
-                
-                if attempt < max_retries:
-                    wait_time = 2 ** attempt  # Exponential backoff
-                    logger.info(f"Retrying in {wait_time} seconds...")
-                    await asyncio.sleep(wait_time)
-                else:
-                    logger.error(f"Failed to send email after {max_retries} attempts")
-                    return False
-                    
-            except Exception as e:
-                logger.error(f"Unexpected email error: {e}")
-                
-                if attempt < max_retries:
-                    await asyncio.sleep(2 ** attempt)
-                else:
-                    return False
-        
-        return False
+
+        # Dispatch to provider-specific senders
+        if provider.lower() == 'brevo':
+            return await self._send_via_brevo(
+                to_email=to_email,
+                subject=subject,
+                html_content=html_content,
+                text_content=text_content,
+                attachments=attachments,
+            )
+        else:
+            return await self._send_via_smtp(message=message, to_email=to_email, max_retries=max_retries)
 
     async def _send_via_brevo(
         self,
@@ -240,8 +166,12 @@ class EmailService:
 
             timeout = settings.SMTP_TIMEOUT if getattr(settings, 'SMTP_TIMEOUT', None) else 30
 
+            logger.info("Calling Brevo API...")
             async with httpx.AsyncClient(timeout=timeout) as client:
                 resp = await client.post(api_url, json=payload, headers=headers)
+
+            logger.info(f"Brevo response: {resp.status_code}")
+            logger.info(resp.text)
 
             if resp.status_code in (200, 201, 202):
                 logger.info(f"Brevo email sent to {to_email} (status {resp.status_code})")
@@ -253,6 +183,83 @@ class EmailService:
         except Exception as e:
             logger.exception(f"Unexpected Brevo send error: {e}")
             return False
+
+    async def _send_via_smtp(self, message: MIMEMultipart, to_email: str, max_retries: int = 3) -> bool:
+        """Send prepared MIME message via SMTP with retries."""
+        # Skip if SMTP not configured
+        if not settings.is_smtp_configured():
+            logger.warning(f"SMTP not configured. Email to {to_email} not sent.")
+            return False
+
+        for attempt in range(1, max_retries + 1):
+            try:
+                logger.info(f"Sending email to {to_email} (attempt {attempt}/{max_retries})...")
+
+                # Choose connection method based on settings
+                if settings.SMTP_USE_TLS:
+                    # SSL/TLS (port 465)
+                    await aiosmtplib.send(
+                        message,
+                        hostname=settings.SMTP_HOST,
+                        port=settings.SMTP_PORT,
+                        username=settings.SMTP_USERNAME,
+                        password=settings.SMTP_PASSWORD,
+                        use_tls=True,
+                        timeout=settings.SMTP_TIMEOUT,
+                    )
+                elif settings.SMTP_USE_STARTTLS:
+                    # STARTTLS (port 587)
+                    await aiosmtplib.send(
+                        message,
+                        hostname=settings.SMTP_HOST,
+                        port=settings.SMTP_PORT,
+                        username=settings.SMTP_USERNAME,
+                        password=settings.SMTP_PASSWORD,
+                        start_tls=True,
+                        timeout=settings.SMTP_TIMEOUT,
+                    )
+                else:
+                    # Plain SMTP (port 25, 2525)
+                    await aiosmtplib.send(
+                        message,
+                        hostname=settings.SMTP_HOST,
+                        port=settings.SMTP_PORT,
+                        username=settings.SMTP_USERNAME,
+                        password=settings.SMTP_PASSWORD,
+                        timeout=settings.SMTP_TIMEOUT,
+                    )
+
+                logger.info(f"Email sent successfully to {to_email}")
+                return True
+
+            except aiosmtplib.SMTPAuthenticationError as e:
+                logger.error(f"SMTP authentication failed: {e}")
+                return False  # Don't retry auth errors
+
+            except aiosmtplib.SMTPRecipientsRefused as e:
+                logger.error(f"Recipient refused: {to_email} - {e}")
+                return False  # Don't retry invalid recipients
+
+            except aiosmtplib.SMTPException as e:
+                logger.error(f"SMTP error (attempt {attempt}/{max_retries}): {e}")
+
+                if attempt < max_retries:
+                    wait_time = 2 ** attempt  # Exponential backoff
+                    logger.info(f"Retrying in {wait_time} seconds...")
+                    await asyncio.sleep(wait_time)
+                else:
+                    logger.error(f"Failed to send email after {max_retries} attempts")
+                    return False
+
+            except Exception as e:
+                logger.error(f"Unexpected email error: {e}")
+
+                if attempt < max_retries:
+                    await asyncio.sleep(2 ** attempt)
+                else:
+                    return False
+
+        return False
     
     async def send_otp_email(
         self,

@@ -4,6 +4,8 @@ Handles sending transactional emails (OTP, verification, etc.)
 """
 
 import aiosmtplib
+import httpx
+import base64
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
@@ -75,6 +77,17 @@ class EmailService:
         Returns:
             True if sent successfully, False otherwise
         """
+        # If configured to use Brevo, use Brevo API path
+        provider = getattr(settings, 'EMAIL_PROVIDER', 'smtp') or 'smtp'
+        if provider.lower() == 'brevo':
+            return await self._send_via_brevo(
+                to_email=to_email,
+                subject=subject,
+                html_content=html_content,
+                text_content=text_content,
+                attachments=attachments,
+            )
+
         # Skip if SMTP not configured
         if not settings.is_smtp_configured():
             logger.warning(f"SMTP not configured. Email to {to_email} not sent.")
@@ -182,6 +195,64 @@ class EmailService:
                     return False
         
         return False
+
+    async def _send_via_brevo(
+        self,
+        to_email: str,
+        subject: str,
+        html_content: str,
+        text_content: Optional[str] = None,
+        attachments: Optional[List[dict]] = None,
+    ) -> bool:
+        """
+        Send email via Brevo (Sendinblue) transactional API.
+        """
+        try:
+            if not settings.is_brevo_configured():
+                logger.error("Brevo is not configured (missing API key or sender email)")
+                return False
+
+            api_url = "https://api.brevo.com/v3/smtp/email"
+            headers = {
+                "api-key": settings.BREVO_API_KEY,
+                "Content-Type": "application/json",
+            }
+
+            payload = {
+                "sender": {"email": settings.BREVO_SENDER_EMAIL, "name": settings.BREVO_SENDER_NAME or settings.APP_NAME},
+                "to": [{"email": to_email}],
+                "subject": subject,
+                "htmlContent": html_content,
+                "textContent": text_content or "",
+            }
+
+            # Attachments (base64)
+            if attachments:
+                brevo_atts = []
+                for att in attachments:
+                    try:
+                        content_b64 = base64.b64encode(att['content']).decode('ascii')
+                        brevo_atts.append({"name": att['filename'], "content": content_b64})
+                    except Exception as e:
+                        logger.error(f"Failed to encode attachment {att.get('filename')}: {e}")
+                if brevo_atts:
+                    payload['attachment'] = brevo_atts
+
+            timeout = settings.SMTP_TIMEOUT if getattr(settings, 'SMTP_TIMEOUT', None) else 30
+
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                resp = await client.post(api_url, json=payload, headers=headers)
+
+            if resp.status_code in (200, 201, 202):
+                logger.info(f"Brevo email sent to {to_email} (status {resp.status_code})")
+                return True
+            else:
+                logger.error(f"Brevo send failed: {resp.status_code} - {resp.text}")
+                return False
+
+        except Exception as e:
+            logger.exception(f"Unexpected Brevo send error: {e}")
+            return False
     
     async def send_otp_email(
         self,

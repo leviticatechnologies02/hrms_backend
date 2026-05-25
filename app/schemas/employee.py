@@ -114,6 +114,46 @@ class EmployeeUpdate(BaseModel):
     reporting_manager_id: Optional[int] = None
 
 
+class OnboardingEmployeeCreate(BaseModel):
+    """Schema used by onboarding create endpoint (limited fields).
+
+    Excludes employee_status, business_id, reporting_manager_id,
+    marital_status, blood_group, nationality, religion.
+    """
+    first_name: str = Field(..., min_length=1, max_length=100)
+    last_name: str = Field(..., min_length=1, max_length=100)
+    middle_name: Optional[str] = Field(None, max_length=100)
+    email: EmailStr
+    mobile: Optional[str] = Field(None, pattern=r'^[\+]?[0-9]{10,15}$')
+    alternate_mobile: Optional[str] = Field(None, pattern=r'^[\+]?[0-9]{10,15}$')
+
+    # Employment / personal
+    date_of_birth: Optional[date] = None
+    gender: Optional[Gender] = None
+    date_of_joining: Optional[date] = None
+    date_of_confirmation: Optional[date] = None
+
+    # Organizational identifiers accepted as name or id (onboarding resolves them)
+    department: Optional[str] = None
+    designation: Optional[str] = None
+    location: Optional[str] = None
+    cost_center: Optional[str] = None
+    grade: Optional[str] = None
+    shift_policy: Optional[str] = None
+    week_off_policy: Optional[str] = None
+
+    # Misc
+    biometric_code: Optional[str] = Field(None, max_length=50)
+    send_mobile_login: Optional[bool] = False
+    send_web_login: Optional[bool] = True
+    employee_code: Optional[str] = Field(None, max_length=50)
+
+    @validator('date_of_joining')
+    def validate_joining_date_onboarding(cls, v):
+        if v and v > date.today():
+            raise ValueError('Date of joining cannot be in the future')
+        return v
+    
 class EmployeeProfileBase(BaseModel):
     """Base employee profile schema"""
     # Address Information

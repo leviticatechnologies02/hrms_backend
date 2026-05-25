@@ -133,14 +133,17 @@ class OnboardingEmployeeCreate(BaseModel):
     date_of_joining: Optional[date] = None
     date_of_confirmation: Optional[date] = None
 
-    # Organizational identifiers accepted as name or id (onboarding resolves them)
-    department: Optional[str] = None
-    designation: Optional[str] = None
-    location: Optional[str] = None
-    cost_center: Optional[str] = None
-    grade: Optional[str] = None
-    shift_policy: Optional[str] = None
-    week_off_policy: Optional[str] = None
+
+
+    # Allow clients to send numeric ids directly (preferred in onboarding payloads)
+    department_id: Optional[int] = None
+    designation_id: Optional[int] = None
+    location_id: Optional[int] = None
+    cost_center_id: Optional[int] = None
+    grade_id: Optional[int] = None
+    shift_policy_id: Optional[int] = None
+    week_off_policy_id: Optional[int] = None
+    reporting_manager_id: Optional[int] = None
 
     # Misc
     biometric_code: Optional[str] = Field(None, max_length=50)

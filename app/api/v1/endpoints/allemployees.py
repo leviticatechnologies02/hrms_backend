@@ -1227,6 +1227,7 @@ async def get_employee_basic_info(
 @router.get("/dropdown-data")
 async def get_dropdown_data(
     business_id: int = Path(..., description="Business ID"),
+    active: Optional[bool] = Query(None, description="If true return only active items; if false only inactive; if omitted return all"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -1236,28 +1237,45 @@ async def get_dropdown_data(
         from app.models.location import Location
         from app.models.department import Department
         from app.models.designations import Designation
+        from app.models.cost_center import CostCenter
         
         # Validate business access and fetch scoped data
         validate_business_access(business_id, current_user, db)
 
-        businesses = db.query(Business).filter(
-            Business.id == business_id
-        ).all()
+        businesses = db.query(Business).filter(Business.id == business_id).all()
 
-        locations = db.query(Location).filter(
-            Location.business_id == business_id
-        ).all()
+        # locations
+        loc_q = db.query(Location).filter(Location.business_id == business_id)
+        if active is not None and hasattr(Location, 'is_active'):
+            loc_q = loc_q.filter(Location.is_active == active)
+        locations = loc_q.all()
 
-        departments = db.query(Department).filter(
-            Department.business_id == business_id
-        ).all()
-        designations = db.query(Designation).all()
+        # departments
+        dept_q = db.query(Department).filter(Department.business_id == business_id)
+        if active is not None and hasattr(Department, 'is_active'):
+            dept_q = dept_q.filter(Department.is_active == active)
+        departments = dept_q.all()
+
+        # designations (may be global)
+        des_q = db.query(Designation)
+        if hasattr(Designation, 'business_id'):
+            des_q = des_q.filter(Designation.business_id == business_id)
+        if active is not None and hasattr(Designation, 'is_active'):
+            des_q = des_q.filter(Designation.is_active == active)
+        designations = des_q.all()
+
+        # cost centers
+        cc_q = db.query(CostCenter).filter(CostCenter.business_id == business_id)
+        if active is not None and hasattr(CostCenter, 'is_active'):
+            cc_q = cc_q.filter(CostCenter.is_active == active)
+        cost_centers = cc_q.all()
         
         return {
             "businesses": [{"id": b.id, "name": b.business_name} for b in businesses],
             "locations": [{"id": l.id, "name": l.name} for l in locations],
             "departments": [{"id": d.id, "name": d.name} for d in departments],
             "designations": [{"id": d.id, "name": d.name} for d in designations]
+            ,"cost_centers": [{"id": c.id, "name": c.name} for c in cost_centers]
         }
     
     except Exception as e:

@@ -138,43 +138,92 @@ async def create_employee(
         shift_policy_id = None
         weekoff_policy_id = None
 
-        if employee_data.department:
+        # Department: accept `department_id` (int) or `department` (name)
+        if getattr(employee_data, 'department_id', None) is not None:
+            from app.models.department import Department
+            dept = db.query(Department).filter(Department.id == int(employee_data.department_id), Department.business_id == business_id).first()
+            if not dept:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Department id {employee_data.department_id} not found")
+            department_id = int(employee_data.department_id)
+        elif getattr(employee_data, 'department', None):
             from app.models.department import Department
             department_id = resolve(Department, employee_data.department)
             if employee_data.department and department_id is None:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Department '{employee_data.department}' not found")
 
-        if employee_data.designation:
+        # Designation: accept `designation_id` or `designation` (name)
+        if getattr(employee_data, 'designation_id', None) is not None:
+            from app.models.designations import Designation
+            des = db.query(Designation).filter(Designation.id == int(employee_data.designation_id), Designation.business_id == business_id).first()
+            if not des:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Designation id {employee_data.designation_id} not found")
+            designation_id = int(employee_data.designation_id)
+        elif getattr(employee_data, 'designation', None):
             from app.models.designations import Designation
             designation_id = resolve(Designation, employee_data.designation)
             if employee_data.designation and designation_id is None:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Designation '{employee_data.designation}' not found")
 
-        if employee_data.location:
+        # Location: accept `location_id` or `location` (name)
+        if getattr(employee_data, 'location_id', None) is not None:
+            from app.models.location import Location
+            loc = db.query(Location).filter(Location.id == int(employee_data.location_id), Location.business_id == business_id).first()
+            if not loc:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Location id {employee_data.location_id} not found")
+            location_id = int(employee_data.location_id)
+        elif getattr(employee_data, 'location', None):
             from app.models.location import Location
             location_id = resolve(Location, employee_data.location)
             if employee_data.location and location_id is None:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Location '{employee_data.location}' not found")
         
-        if employee_data.cost_center:
+        # Cost center: accept `cost_center_id` or `cost_center` (name)
+        if getattr(employee_data, 'cost_center_id', None) is not None:
+            from app.models.cost_center import CostCenter
+            cc = db.query(CostCenter).filter(CostCenter.id == int(employee_data.cost_center_id), CostCenter.business_id == business_id).first()
+            if not cc:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Cost center id {employee_data.cost_center_id} not found")
+            cost_center_id = int(employee_data.cost_center_id)
+        elif getattr(employee_data, 'cost_center', None):
             from app.models.cost_center import CostCenter
             cost_center_id = resolve(CostCenter, employee_data.cost_center)
             if employee_data.cost_center and cost_center_id is None:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Cost center '{employee_data.cost_center}' not found")
 
-        if employee_data.grade:
+        # Grade: accept `grade_id` or `grade` (name)
+        if getattr(employee_data, 'grade_id', None) is not None:
+            from app.models.grades import Grade
+            gd = db.query(Grade).filter(Grade.id == int(employee_data.grade_id), Grade.business_id == business_id).first()
+            if not gd:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Grade id {employee_data.grade_id} not found")
+            grade_id = int(employee_data.grade_id)
+        elif getattr(employee_data, 'grade', None):
             from app.models.grades import Grade
             grade_id = resolve(Grade, employee_data.grade)
             if employee_data.grade and grade_id is None:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Grade '{employee_data.grade}' not found")
 
-        if employee_data.shift_policy:
+        # Shift policy: accept `shift_policy_id` or `shift_policy` (name)
+        if getattr(employee_data, 'shift_policy_id', None) is not None:
+            from app.models.shift_policy import ShiftPolicy
+            sp = db.query(ShiftPolicy).filter(ShiftPolicy.id == int(employee_data.shift_policy_id), ShiftPolicy.business_id == business_id).first()
+            if not sp:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Shift policy id {employee_data.shift_policy_id} not found")
+            shift_policy_id = int(employee_data.shift_policy_id)
+        elif getattr(employee_data, 'shift_policy', None):
             from app.models.shift_policy import ShiftPolicy
             shift_policy_id = resolve(ShiftPolicy, employee_data.shift_policy)
             if employee_data.shift_policy and shift_policy_id is None:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Shift policy '{employee_data.shift_policy}' not found")
 
-        if employee_data.week_off_policy:
+        # Week off policy: accept `week_off_policy_id` or `week_off_policy` (name)
+        if getattr(employee_data, 'week_off_policy_id', None) is not None:
+            from app.models.weekoff_policy import WeekOffPolicy
+            wp = db.query(WeekOffPolicy).filter(WeekOffPolicy.id == int(employee_data.week_off_policy_id), WeekOffPolicy.business_id == business_id).first()
+            if not wp:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Week off policy id {employee_data.week_off_policy_id} not found")
+            weekoff_policy_id = int(employee_data.week_off_policy_id)
+        elif getattr(employee_data, 'week_off_policy', None):
             from app.models.weekoff_policy import WeekOffPolicy
             weekoff_policy_id = resolve(WeekOffPolicy, employee_data.week_off_policy)
             if employee_data.week_off_policy and weekoff_policy_id is None:
@@ -195,6 +244,18 @@ async def create_employee(
         
         # Validate business access and create new employee scoped to business
         validate_business_access(business_id, current_user, db)
+
+        # Validate reporting manager id if provided
+        reporting_manager_id = None
+        if getattr(employee_data, 'reporting_manager_id', None) is not None:
+            try:
+                mgr_id = int(employee_data.reporting_manager_id)
+            except Exception:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid reporting_manager_id")
+            mgr = db.query(Employee).filter(Employee.id == mgr_id, Employee.business_id == business_id).first()
+            if not mgr:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Reporting manager id {mgr_id} not found")
+            reporting_manager_id = mgr_id
 
         # Normalize gender to the DB enum values
         gender_value = None
@@ -234,7 +295,8 @@ async def create_employee(
             grade_id=grade_id,
             shift_policy_id=shift_policy_id,
             weekoff_policy_id=weekoff_policy_id,
-            employee_status="ACTIVE",
+            send_mobile_login=getattr(employee_data, 'send_mobile_login', False),
+            send_web_login=getattr(employee_data, 'send_web_login', True),
             created_by=current_user.id
         )
         
@@ -268,7 +330,6 @@ async def create_employee(
             "designation_id": new_employee.designation_id,
             "shift_policy_id": new_employee.shift_policy_id,
             "week_off_policy_id": new_employee.weekoff_policy_id,
-            "reporting_manager_id": new_employee.reporting_manager_id
         }
 
         return {"success": True, "message": "Employee created successfully", "employee": response_employee}

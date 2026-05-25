@@ -11,6 +11,10 @@
     {
       "timestamp": "2026-05-25T23:14:16.161349",
       "value": 21.9
+    },
+    {
+      "timestamp": "2026-05-25T23:14:47.167715",
+      "value": 20.1
     }
   ],
   "memory_usage_history": [
@@ -25,15 +29,19 @@
     {
       "timestamp": "2026-05-25T23:14:16.161349",
       "value": 87.0
+    },
+    {
+      "timestamp": "2026-05-25T23:14:47.167715",
+      "value": 87.5
     }
   ],
   "response_times": [],
   "error_rates": [],
   "peak_usage": {
     "cpu_peak": 21.9,
-    "memory_peak": 87.0,
+    "memory_peak": 87.5,
     "slowest_response": 0.0
   },
-  "health_score": 99.62,
-  "last_updated": "2026-05-25T23:14:16.161349"
+  "health_score": 99.5275,
+  "last_updated": "2026-05-25T23:14:47.167715"
 }

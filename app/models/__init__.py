@@ -293,3 +293,6 @@ from .leave_balance import LeaveBalance, LeaveCorrection
 from .remote_session import RemoteSession, RemoteSessionStatus, RemoteSessionType
 from .todo import TodoTask
 from .calendar import CalendarEvent, CalendarEventAttendee, CalendarView
+from .otp_verification import OTPVerification
+
+__all__.append("OTPVerification")

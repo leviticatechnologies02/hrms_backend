@@ -615,6 +615,7 @@ async def get_all_employees(
                 "department": emp.department.name if emp.department else "General",
                 "location": emp.location.name if emp.location else "Office",
                 "business_unit": emp.business.business_name if emp.business else (emp.business_unit.name if emp.business_unit else "Company"),
+                "business_id": emp.business_id,
                 "cost_center": emp.cost_center.name if emp.cost_center else "N/A",
                 "joining": emp.date_of_joining.strftime("%b %d, %Y") if emp.date_of_joining else "N/A",
                 "img": img_url,
@@ -668,6 +669,7 @@ async def update_employee_status(
             "employee": {
                 "id": employee.id,
                 "name": f"{employee.first_name} {employee.last_name}",
+                "business_id": employee.business_id,
                 "code": employee.employee_code,
                 "active": active,
                 "status": new_status
@@ -980,6 +982,7 @@ async def get_employee_summary(
             "department": department,
             "location": location,
             "business": business_name,
+            "business_id": employee.business_id,
             "costCenter": cost_center,
             "grade": grade,
             "joining": employee.date_of_joining.strftime("%b %d, %Y") if employee.date_of_joining else "N/A",
@@ -1197,6 +1200,7 @@ async def get_employee_basic_info(
             "name": f"{employee.first_name or ''} {employee.last_name or ''}".strip() or "Unknown Employee",
             "code": employee.employee_code or f"EMP{employee.id:03d}",
             "img": profile_image_url,
+            "business_id": employee.business_id,
             "basicInfo": basic_info
         }
         
@@ -1327,6 +1331,7 @@ async def get_employees_list(
                 "first_name": first_name,
                 "last_name": last_name,
                 "employee_code": employee_code,
+                "business_id": emp.business_id,
                 "email": emp.email or "",
                 "designation": designation
             })
@@ -1391,6 +1396,7 @@ async def get_employee_details(
             "position": position,
             "department": department,
             "location": location,
+            "business_id": employee.business_id,
             "joining": employee.date_of_joining.strftime("%b %d, %Y") if employee.date_of_joining else "N/A",
             "img": "/assets/img/users/user-01.jpg",
             "active": employee.employee_status == "active" if employee.employee_status else True,
@@ -1439,7 +1445,8 @@ async def search_employees(
             Employee.last_name,
             Employee.employee_code,
             Employee.email,
-            Employee.employee_status
+            Employee.employee_status,
+            Employee.business_id
         ).filter(
             Employee.business_id == business_id
         ).filter(
@@ -1457,7 +1464,8 @@ async def search_employees(
                     "name": f"{emp.first_name or ''} {emp.last_name or ''}".strip(),
                     "code": emp.employee_code or f"EMP{emp.id:03d}",
                     "email": emp.email or "",
-                    "active": True
+                    "active": True,
+                    "business_id": emp.business_id
                 }
                 for emp in employees
             ]
@@ -1500,6 +1508,7 @@ async def get_employee_by_id(
             "firstName": employee.first_name or "",
             "lastName": employee.last_name or "",
             "middleName": employee.middle_name or "",
+            "business_id": employee.business_id,
             "email": employee.email or "",
             "mobile": employee.mobile or "",
             "employeeCode": employee.employee_code or f"EMP{employee.id:03d}",
@@ -1523,6 +1532,213 @@ async def get_employee_by_id(
         )
 
 
+<<<<<<< Updated upstream
+=======
+@router.post("/")
+async def create_employee(
+    employee_data: EmployeeCreate,
+    business_id: int = Path(..., description="Business ID"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_admin)
+):
+    """Create new employee with comprehensive validation"""
+    try:
+        from app.models.employee import Employee
+        
+        # Check if email already exists
+        existing_email = db.query(Employee).filter(Employee.email == employee_data.email).first()
+        if existing_email:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Employee with email {employee_data.email} already exists"
+            )
+        
+        # Check if employee code already exists
+        if employee_data.employee_code:
+            existing_code = db.query(Employee).filter(Employee.employee_code == employee_data.employee_code).first()
+            if existing_code:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Employee code {employee_data.employee_code} already exists"
+                )
+
+        # Validate/resolve related fields (accept name or id)
+        def resolve(model, value):
+            if not value:
+                return None
+            try:
+                # numeric id
+                if isinstance(value, int) or (isinstance(value, str) and value.isdigit()):
+                    row = db.query(model).filter(model.id == int(value)).first()
+                    return row.id if row else None
+                # lookup by name column
+                row = db.query(model).filter(getattr(model, 'business_id', None) == business_id, getattr(model, 'name') == value).first()
+                if not row:
+                    # fallback to global name match
+                    row = db.query(model).filter(getattr(model, 'name') == value).first()
+                return row.id if row else None
+            except Exception:
+                return None
+
+        department_id = None
+        designation_id = None
+        location_id = None
+        cost_center_id = None
+        grade_id = None
+        shift_policy_id = None
+        weekoff_policy_id = None
+
+        if employee_data.department:
+            from app.models.department import Department
+            department_id = resolve(Department, employee_data.department)
+            if employee_data.department and department_id is None:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Department '{employee_data.department}' not found")
+
+        if employee_data.designation:
+            from app.models.designations import Designation
+            designation_id = resolve(Designation, employee_data.designation)
+            if employee_data.designation and designation_id is None:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Designation '{employee_data.designation}' not found")
+
+        if employee_data.location:
+            from app.models.location import Location
+            location_id = resolve(Location, employee_data.location)
+            if employee_data.location and location_id is None:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Location '{employee_data.location}' not found")
+        
+        if employee_data.cost_center:
+            from app.models.cost_center import CostCenter
+            cost_center_id = resolve(CostCenter, employee_data.cost_center)
+            if employee_data.cost_center and cost_center_id is None:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Cost center '{employee_data.cost_center}' not found")
+
+        if employee_data.grade:
+            from app.models.grades import Grade
+            grade_id = resolve(Grade, employee_data.grade)
+            if employee_data.grade and grade_id is None:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Grade '{employee_data.grade}' not found")
+
+        if employee_data.shift_policy:
+            from app.models.shift_policy import ShiftPolicy
+            shift_policy_id = resolve(ShiftPolicy, employee_data.shift_policy)
+            if employee_data.shift_policy and shift_policy_id is None:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Shift policy '{employee_data.shift_policy}' not found")
+
+        if employee_data.week_off_policy:
+            from app.models.weekoff_policy import WeekOffPolicy
+            weekoff_policy_id = resolve(WeekOffPolicy, employee_data.week_off_policy)
+            if employee_data.week_off_policy and weekoff_policy_id is None:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Week off policy '{employee_data.week_off_policy}' not found")
+        
+        # Auto-generate employee code if not provided
+        employee_code = employee_data.employee_code
+        if not employee_code:
+            # Get the next available employee ID to generate code
+            max_id = db.query(Employee.id).order_by(Employee.id.desc()).first()
+            next_id = (max_id[0] + 1) if max_id else 1
+            employee_code = f"EMP{next_id:03d}"
+            
+            # Ensure uniqueness
+            while db.query(Employee).filter(Employee.employee_code == employee_code).first():
+                next_id += 1
+                employee_code = f"EMP{next_id:03d}"
+        
+        # Validate business access and create new employee scoped to business
+        validate_business_access(business_id, current_user, db)
+
+        # Normalize gender to the DB enum values
+        gender_value = None
+        if getattr(employee_data, 'gender', None):
+            try:
+                g = str(employee_data.gender).strip().lower()
+                if g in ('male', 'm'):
+                    gender_value = 'male'
+                elif g in ('female', 'f'):
+                    gender_value = 'female'
+                elif g in ('other', 'o'):
+                    gender_value = 'other'
+                else:
+                    # leave as None to avoid invalid enum insert
+                    gender_value = None
+            except Exception:
+                gender_value = None
+
+        # Create new employee (use resolved ids)
+        new_employee = Employee(
+            business_id=business_id,
+            first_name=employee_data.first_name,
+            last_name=employee_data.last_name,
+            middle_name=getattr(employee_data, 'middle_name', None),
+            email=employee_data.email,
+            mobile=getattr(employee_data, 'mobile', None),
+            date_of_joining=getattr(employee_data, 'joining_date', None),
+            date_of_birth=getattr(employee_data, 'dob', None),
+            date_of_confirmation=getattr(employee_data, 'confirmation_date', None),
+            gender=gender_value,
+            employee_code=employee_code,
+            biometric_code=getattr(employee_data, 'biometric_code', None),
+            department_id=department_id,
+            designation_id=designation_id,
+            location_id=location_id,
+            cost_center_id=cost_center_id,
+            grade_id=grade_id,
+            shift_policy_id=shift_policy_id,
+            weekoff_policy_id=weekoff_policy_id,
+            employee_status="ACTIVE",
+            created_by=current_user.id
+        )
+        
+        db.add(new_employee)
+        db.commit()
+        db.refresh(new_employee)
+        
+        print(f"✅ Employee created successfully: {new_employee.first_name} {new_employee.last_name} (ID: {new_employee.id})")
+        
+        response_employee = {
+            "id": new_employee.id,
+            "first_name": new_employee.first_name,
+            "middle_name": new_employee.middle_name,
+            "last_name": new_employee.last_name,
+            "joining_date": new_employee.date_of_joining.isoformat() if new_employee.date_of_joining else None,
+            "confirmation_date": new_employee.date_of_confirmation.isoformat() if new_employee.date_of_confirmation else None,
+            "dob": new_employee.date_of_birth.isoformat() if new_employee.date_of_birth else None,
+            "gender": employee_data.gender if getattr(employee_data, 'gender', None) is not None else (new_employee.gender if new_employee.gender else None),
+            "employee_code": new_employee.employee_code,
+            "biometric_code": new_employee.biometric_code,
+            "mobile": new_employee.mobile,
+            "email": new_employee.email,
+            "send_mobile_login": new_employee.send_mobile_login if hasattr(new_employee, 'send_mobile_login') else getattr(employee_data, 'send_mobile_login', False),
+            "send_web_login": new_employee.send_web_login if hasattr(new_employee, 'send_web_login') else getattr(employee_data, 'send_web_login', True),
+            "location": employee_data.location if getattr(employee_data, 'location', None) is not None else new_employee.location_id,
+            "cost_center": employee_data.cost_center if getattr(employee_data, 'cost_center', None) is not None else new_employee.cost_center_id,
+            "department": employee_data.department if getattr(employee_data, 'department', None) is not None else new_employee.department_id,
+            "grade": employee_data.grade if getattr(employee_data, 'grade', None) is not None else new_employee.grade_id,
+            "designation": employee_data.designation if getattr(employee_data, 'designation', None) is not None else new_employee.designation_id,
+            "shift_policy": employee_data.shift_policy if getattr(employee_data, 'shift_policy', None) is not None else new_employee.shift_policy_id,
+            "week_off_policy": employee_data.week_off_policy if getattr(employee_data, 'week_off_policy', None) is not None else new_employee.weekoff_policy_id,
+            "location_id": new_employee.location_id,
+            "cost_center_id": new_employee.cost_center_id,
+            "department_id": new_employee.department_id,
+            "grade_id": new_employee.grade_id,
+            "designation_id": new_employee.designation_id,
+            "shift_policy_id": new_employee.shift_policy_id,
+            "week_off_policy_id": new_employee.weekoff_policy_id
+            ,"business_id": new_employee.business_id
+        }
+
+        return {"success": True, "message": "Employee created successfully", "employee": response_employee}
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        print(f"❌ ERROR in create_employee: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to create employee: {str(e)}"
+        )
+
+>>>>>>> Stashed changes
 
 @router.put("/{employee_id}")
 async def update_employee(
@@ -1746,7 +1962,8 @@ async def update_employee(
                 "name": f"{employee.first_name} {employee.last_name}",
                 "code": employee.employee_code or f"EMP{employee.id:03d}",
                 "email": employee.email,
-                "status": employee.employee_status
+                "status": employee.employee_status,
+                "business_id": employee.business_id
             }
         }
     
@@ -1891,7 +2108,8 @@ async def upload_employee_profile_image(
             "employee": {
                 "id": employee.id,
                 "name": f"{employee.first_name} {employee.last_name}",
-                "profileImageUrl": full_image_url  # Return full URL
+                "profileImageUrl": full_image_url,  # Return full URL
+                "business_id": employee.business_id
             },
             "fileInfo": {
                 "filename": unique_filename,
@@ -1959,7 +2177,8 @@ async def remove_employee_profile_image(
             "employee": {
                 "id": employee.id,
                 "name": f"{employee.first_name} {employee.last_name}",
-                "profileImageUrl": None
+                "profileImageUrl": None,
+                "business_id": employee.business_id
             }
         }
     
@@ -2465,7 +2684,8 @@ async def update_employee_basic_info(
             "employee": {
                 "id": employee.id,
                 "name": f"{employee.first_name} {employee.last_name}",
-                "code": employee.employee_code
+                "code": employee.employee_code,
+                "business_id": employee.business_id
             }
         }
         
@@ -4224,19 +4444,32 @@ async def get_employee_identity(
                 detail=f"Employee with ID {employee_id} not found"
             )
         
+        # Prefer an explicit, business-scoped EmployeeProfile lookup to avoid
+        # cross-business or missing-profile issues during setup.
+        from app.models.employee import EmployeeProfile
+
+        profile = db.query(EmployeeProfile).filter(
+            EmployeeProfile.employee_id == employee_id,
+            EmployeeProfile.business_id == business_id
+        ).first()
+
+        if not profile:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Employee profile not found"
+            )
+
         return {
-            "id": employee.id,
-            "name": f"{employee.first_name or ''} {employee.last_name or ''}".strip(),
-            "identity": {
-                "aadharNumber": getattr(employee, 'aadhar_number', '') or "",
-                "panNumber": employee.profile.pan_number if employee.profile else "",
-                "passportNumber": getattr(employee, 'passport_number', '') or "",
-                "drivingLicense": getattr(employee, 'driving_license', '') or "",
-                "voterIdNumber": getattr(employee, 'voter_id', '') or "",
-                "bankAccountNumber": getattr(employee, 'bank_account_number', '') or "",
-                "ifscCode": getattr(employee, 'ifsc_code', '') or "",
-                "bankName": getattr(employee, 'bank_name', '') or ""
-            }
+            "employee_id": employee.id,
+            "business_id": employee.business_id,
+            "bank_name": profile.bank_name or "",
+            "bank_account_number": profile.bank_account_number or "",
+            "ifsc_code": profile.ifsc_code or "",
+            "pan_number": profile.pan_number or "",
+            "aadhaar_number": profile.aadhaar_number or "",
+            "passport_number": profile.passport_number or "",
+            "driving_license": profile.driving_license or "",
+            "voter_id": profile.voter_id or ""
         }
     
     except HTTPException:

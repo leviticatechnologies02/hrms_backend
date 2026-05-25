@@ -10,6 +10,7 @@ from app.api.v1.deps import get_current_admin, get_current_superadmin, get_curre
 from app.models.user import User
 
 from .endpoints import auth, superadmin, health, files, registration, dev, business, employees, allemployees, dashboard, onboarding, separation, attendance, datacapture, bulkupdate, requests, hrmanagement, payroll, reports, setup_dashboard, crm, profile, master_setup, master_policies, salary_setup, calendar, project_management, notes, subscriptions, packages, domain, purchase_transaction, documents, help, support, system_stats, preferences, todo, contact_inquiry, public_location, password_reset
+from .endpoints import otp
 
 from app.api.v1.setup.mastersetup.workflows import router as workflows_router
 from app.api.v1.setup.mastersetup.business_unit_files import router as business_unit_files_router
@@ -389,6 +390,13 @@ api_router.include_router(
     onboarding.router,
     prefix="/{business_id}/onboarding",
     tags=["Onboarding"]
+)
+
+# OTP verification endpoints (public - multi-tenant)
+api_router.include_router(
+    otp.router,
+    prefix="/{business_id}",
+    tags=["OTP"],
 )
 
 # ============================================================================

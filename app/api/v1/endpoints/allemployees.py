@@ -1270,11 +1270,11 @@ async def get_dropdown_data(
         cost_centers = cc_q.all()
         
         return {
-            "businesses": [{"id": b.id, "name": b.business_name} for b in businesses],
-            "locations": [{"id": l.id, "name": l.name} for l in locations],
-            "departments": [{"id": d.id, "name": d.name} for d in departments],
-            "designations": [{"id": d.id, "name": d.name} for d in designations]
-            ,"cost_centers": [{"id": c.id, "name": c.name} for c in cost_centers]
+            "businesses": [{"id": b.id, "name": b.business_name, "is_active": getattr(b, 'is_active', True)} for b in businesses],
+            "locations": [{"id": l.id, "name": l.name, "is_active": getattr(l, 'is_active', True)} for l in locations],
+            "departments": [{"id": d.id, "name": d.name, "is_active": getattr(d, 'is_active', True)} for d in departments],
+            "designations": [{"id": d.id, "name": d.name, "is_active": getattr(d, 'is_active', True)} for d in designations],
+            "cost_centers": [{"id": c.id, "name": c.name, "is_active": getattr(c, 'is_active', True)} for c in cost_centers]
         }
     
     except Exception as e:

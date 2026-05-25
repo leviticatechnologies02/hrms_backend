@@ -1227,6 +1227,7 @@ async def get_employee_basic_info(
 @router.get("/dropdown-data")
 async def get_dropdown_data(
     business_id: int = Path(..., description="Business ID"),
+    active: Optional[bool] = Query(None, description="If true return only active items; if false only inactive; if omitted return all"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -1236,28 +1237,44 @@ async def get_dropdown_data(
         from app.models.location import Location
         from app.models.department import Department
         from app.models.designations import Designation
+        from app.models.cost_center import CostCenter
         
         # Validate business access and fetch scoped data
         validate_business_access(business_id, current_user, db)
 
-        businesses = db.query(Business).filter(
-            Business.id == business_id
-        ).all()
+        businesses = db.query(Business).filter(Business.id == business_id).all()
+        # locations
+        loc_q = db.query(Location).filter(Location.business_id == business_id)
+        if active is not None and hasattr(Location, 'is_active'):
+            loc_q = loc_q.filter(Location.is_active == active)
+        locations = loc_q.all()
 
-        locations = db.query(Location).filter(
-            Location.business_id == business_id
-        ).all()
+        # departments
+        dept_q = db.query(Department).filter(Department.business_id == business_id)
+        if active is not None and hasattr(Department, 'is_active'):
+            dept_q = dept_q.filter(Department.is_active == active)
+        departments = dept_q.all()
 
-        departments = db.query(Department).filter(
-            Department.business_id == business_id
-        ).all()
-        designations = db.query(Designation).all()
+        # designations (may be global)
+        des_q = db.query(Designation)
+        if hasattr(Designation, 'business_id'):
+            des_q = des_q.filter(Designation.business_id == business_id)
+        if active is not None and hasattr(Designation, 'is_active'):
+            des_q = des_q.filter(Designation.is_active == active)
+        designations = des_q.all()
+
+        # cost centers
+        cc_q = db.query(CostCenter).filter(CostCenter.business_id == business_id)
+        if active is not None and hasattr(CostCenter, 'is_active'):
+            cc_q = cc_q.filter(CostCenter.is_active == active)
+        cost_centers = cc_q.all()
         
         return {
-            "businesses": [{"id": b.id, "name": b.business_name} for b in businesses],
-            "locations": [{"id": l.id, "name": l.name} for l in locations],
-            "departments": [{"id": d.id, "name": d.name} for d in departments],
-            "designations": [{"id": d.id, "name": d.name} for d in designations]
+            "businesses": [{"id": b.id, "name": b.business_name, "is_active": getattr(b, 'is_active', True)} for b in businesses],
+            "locations": [{"id": l.id, "name": l.name, "is_active": getattr(l, 'is_active', True)} for l in locations],
+            "departments": [{"id": d.id, "name": d.name, "is_active": getattr(d, 'is_active', True)} for d in departments],
+            "designations": [{"id": d.id, "name": d.name, "is_active": getattr(d, 'is_active', True)} for d in designations],
+            "cost_centers": [{"id": c.id, "name": c.name, "is_active": getattr(c, 'is_active', True)} for c in cost_centers]
         }
     
     except Exception as e:
@@ -1505,209 +1522,6 @@ async def get_employee_by_id(
             detail=f"Failed to fetch employee: {str(e)}"
         )
 
-
-@router.post("/")
-async def create_employee(
-    employee_data: EmployeeCreate,
-    business_id: int = Path(..., description="Business ID"),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_admin)
-):
-    """Create new employee with comprehensive validation"""
-    try:
-        from app.models.employee import Employee
-        
-        # Check if email already exists
-        existing_email = db.query(Employee).filter(Employee.email == employee_data.email).first()
-        if existing_email:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Employee with email {employee_data.email} already exists"
-            )
-        
-        # Check if employee code already exists
-        if employee_data.employee_code:
-            existing_code = db.query(Employee).filter(Employee.employee_code == employee_data.employee_code).first()
-            if existing_code:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Employee code {employee_data.employee_code} already exists"
-                )
-
-        # Validate/resolve related fields (accept name or id)
-        def resolve(model, value):
-            if not value:
-                return None
-            try:
-                # numeric id
-                if isinstance(value, int) or (isinstance(value, str) and value.isdigit()):
-                    row = db.query(model).filter(model.id == int(value)).first()
-                    return row.id if row else None
-                # lookup by name column
-                row = db.query(model).filter(getattr(model, 'business_id', None) == business_id, getattr(model, 'name') == value).first()
-                if not row:
-                    # fallback to global name match
-                    row = db.query(model).filter(getattr(model, 'name') == value).first()
-                return row.id if row else None
-            except Exception:
-                return None
-
-        department_id = None
-        designation_id = None
-        location_id = None
-        cost_center_id = None
-        grade_id = None
-        shift_policy_id = None
-        weekoff_policy_id = None
-
-        if employee_data.department:
-            from app.models.department import Department
-            department_id = resolve(Department, employee_data.department)
-            if employee_data.department and department_id is None:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Department '{employee_data.department}' not found")
-
-        if employee_data.designation:
-            from app.models.designations import Designation
-            designation_id = resolve(Designation, employee_data.designation)
-            if employee_data.designation and designation_id is None:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Designation '{employee_data.designation}' not found")
-
-        if employee_data.location:
-            from app.models.location import Location
-            location_id = resolve(Location, employee_data.location)
-            if employee_data.location and location_id is None:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Location '{employee_data.location}' not found")
-        
-        if employee_data.cost_center:
-            from app.models.cost_center import CostCenter
-            cost_center_id = resolve(CostCenter, employee_data.cost_center)
-            if employee_data.cost_center and cost_center_id is None:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Cost center '{employee_data.cost_center}' not found")
-
-        if employee_data.grade:
-            from app.models.grades import Grade
-            grade_id = resolve(Grade, employee_data.grade)
-            if employee_data.grade and grade_id is None:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Grade '{employee_data.grade}' not found")
-
-        if employee_data.shift_policy:
-            from app.models.shift_policy import ShiftPolicy
-            shift_policy_id = resolve(ShiftPolicy, employee_data.shift_policy)
-            if employee_data.shift_policy and shift_policy_id is None:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Shift policy '{employee_data.shift_policy}' not found")
-
-        if employee_data.week_off_policy:
-            from app.models.weekoff_policy import WeekOffPolicy
-            weekoff_policy_id = resolve(WeekOffPolicy, employee_data.week_off_policy)
-            if employee_data.week_off_policy and weekoff_policy_id is None:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Week off policy '{employee_data.week_off_policy}' not found")
-        
-        # Auto-generate employee code if not provided
-        employee_code = employee_data.employee_code
-        if not employee_code:
-            # Get the next available employee ID to generate code
-            max_id = db.query(Employee.id).order_by(Employee.id.desc()).first()
-            next_id = (max_id[0] + 1) if max_id else 1
-            employee_code = f"EMP{next_id:03d}"
-            
-            # Ensure uniqueness
-            while db.query(Employee).filter(Employee.employee_code == employee_code).first():
-                next_id += 1
-                employee_code = f"EMP{next_id:03d}"
-        
-        # Validate business access and create new employee scoped to business
-        validate_business_access(business_id, current_user, db)
-
-        # Normalize gender to the DB enum values
-        gender_value = None
-        if getattr(employee_data, 'gender', None):
-            try:
-                g = str(employee_data.gender).strip().lower()
-                if g in ('male', 'm'):
-                    gender_value = 'male'
-                elif g in ('female', 'f'):
-                    gender_value = 'female'
-                elif g in ('other', 'o'):
-                    gender_value = 'other'
-                else:
-                    # leave as None to avoid invalid enum insert
-                    gender_value = None
-            except Exception:
-                gender_value = None
-
-        # Create new employee (use resolved ids)
-        new_employee = Employee(
-            business_id=business_id,
-            first_name=employee_data.first_name,
-            last_name=employee_data.last_name,
-            middle_name=getattr(employee_data, 'middle_name', None),
-            email=employee_data.email,
-            mobile=getattr(employee_data, 'mobile', None),
-            date_of_joining=getattr(employee_data, 'joining_date', None),
-            date_of_birth=getattr(employee_data, 'dob', None),
-            date_of_confirmation=getattr(employee_data, 'confirmation_date', None),
-            gender=gender_value,
-            employee_code=employee_code,
-            biometric_code=getattr(employee_data, 'biometric_code', None),
-            department_id=department_id,
-            designation_id=designation_id,
-            location_id=location_id,
-            cost_center_id=cost_center_id,
-            grade_id=grade_id,
-            shift_policy_id=shift_policy_id,
-            weekoff_policy_id=weekoff_policy_id,
-            employee_status="ACTIVE",
-            created_by=current_user.id
-        )
-        
-        db.add(new_employee)
-        db.commit()
-        db.refresh(new_employee)
-        
-        print(f"✅ Employee created successfully: {new_employee.first_name} {new_employee.last_name} (ID: {new_employee.id})")
-        
-        response_employee = {
-            "id": new_employee.id,
-            "first_name": new_employee.first_name,
-            "middle_name": new_employee.middle_name,
-            "last_name": new_employee.last_name,
-            "joining_date": new_employee.date_of_joining.isoformat() if new_employee.date_of_joining else None,
-            "confirmation_date": new_employee.date_of_confirmation.isoformat() if new_employee.date_of_confirmation else None,
-            "dob": new_employee.date_of_birth.isoformat() if new_employee.date_of_birth else None,
-            "gender": employee_data.gender if getattr(employee_data, 'gender', None) is not None else (new_employee.gender if new_employee.gender else None),
-            "employee_code": new_employee.employee_code,
-            "biometric_code": new_employee.biometric_code,
-            "mobile": new_employee.mobile,
-            "email": new_employee.email,
-            "send_mobile_login": new_employee.send_mobile_login if hasattr(new_employee, 'send_mobile_login') else getattr(employee_data, 'send_mobile_login', False),
-            "send_web_login": new_employee.send_web_login if hasattr(new_employee, 'send_web_login') else getattr(employee_data, 'send_web_login', True),
-            "location": employee_data.location if getattr(employee_data, 'location', None) is not None else new_employee.location_id,
-            "cost_center": employee_data.cost_center if getattr(employee_data, 'cost_center', None) is not None else new_employee.cost_center_id,
-            "department": employee_data.department if getattr(employee_data, 'department', None) is not None else new_employee.department_id,
-            "grade": employee_data.grade if getattr(employee_data, 'grade', None) is not None else new_employee.grade_id,
-            "designation": employee_data.designation if getattr(employee_data, 'designation', None) is not None else new_employee.designation_id,
-            "shift_policy": employee_data.shift_policy if getattr(employee_data, 'shift_policy', None) is not None else new_employee.shift_policy_id,
-            "week_off_policy": employee_data.week_off_policy if getattr(employee_data, 'week_off_policy', None) is not None else new_employee.weekoff_policy_id,
-            "location_id": new_employee.location_id,
-            "cost_center_id": new_employee.cost_center_id,
-            "department_id": new_employee.department_id,
-            "grade_id": new_employee.grade_id,
-            "designation_id": new_employee.designation_id,
-            "shift_policy_id": new_employee.shift_policy_id,
-            "week_off_policy_id": new_employee.weekoff_policy_id
-        }
-
-        return {"success": True, "message": "Employee created successfully", "employee": response_employee}
-    
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        print(f"❌ ERROR in create_employee: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create employee: {str(e)}"
-        )
 
 
 @router.put("/{employee_id}")

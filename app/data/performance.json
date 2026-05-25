@@ -3,21 +3,53 @@
     {
       "timestamp": "2026-05-25T23:15:18.219313",
       "value": 55.1
+    },
+    {
+      "timestamp": "2026-05-25T23:15:49.225868",
+      "value": 10.1
+    },
+    {
+      "timestamp": "2026-05-25T23:16:20.232682",
+      "value": 9.6
+    },
+    {
+      "timestamp": "2026-05-25T23:16:51.238065",
+      "value": 9.3
+    },
+    {
+      "timestamp": "2026-05-25T23:17:22.245260",
+      "value": 7.7
     }
   ],
   "memory_usage_history": [
     {
       "timestamp": "2026-05-25T23:15:18.219313",
       "value": 86.3
+    },
+    {
+      "timestamp": "2026-05-25T23:15:49.225868",
+      "value": 87.2
+    },
+    {
+      "timestamp": "2026-05-25T23:16:20.232682",
+      "value": 86.9
+    },
+    {
+      "timestamp": "2026-05-25T23:16:51.238065",
+      "value": 83.0
+    },
+    {
+      "timestamp": "2026-05-25T23:17:22.245260",
+      "value": 83.2
     }
   ],
   "response_times": [],
   "error_rates": [],
   "peak_usage": {
     "cpu_peak": 55.1,
-    "memory_peak": 86.3,
+    "memory_peak": 87.2,
     "slowest_response": 0.0
   },
-  "health_score": 99.61,
-  "last_updated": "2026-05-25T23:15:18.219313"
+  "health_score": 99.904,
+  "last_updated": "2026-05-25T23:17:22.245260"
 }

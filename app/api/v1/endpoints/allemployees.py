@@ -7,8 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query, Body, Uplo
 from sqlalchemy.orm import Session
 from typing import Optional, Dict, Any, List
 from pydantic import BaseModel, validator, Field
-import os
-import uuid
+
 from datetime import datetime, date
 
 from app.core.database import get_db
@@ -679,6 +678,9 @@ async def update_employee_status(
     except HTTPException:
         raise
     except Exception as e:
+
+            # Additional logging or handling can be added here
+
         db.rollback()
         print(f"ERROR in update_employee_status: {str(e)}")
         raise HTTPException(
@@ -760,6 +762,8 @@ async def get_employee_summary(
                 "code": "",
                 "img": f"{BASE_URL}/assets/img/users/user-01.jpg"
             },
+
+            # Additional logging or handling can be added here
             "indirectManager": {
                 "name": "Not Defined",
                 "code": "",
@@ -1531,9 +1535,6 @@ async def get_employee_by_id(
             detail=f"Failed to fetch employee: {str(e)}"
         )
 
-
-<<<<<<< Updated upstream
-=======
 @router.post("/")
 async def create_employee(
     employee_data: EmployeeCreate,
@@ -1738,7 +1739,6 @@ async def create_employee(
             detail=f"Failed to create employee: {str(e)}"
         )
 
->>>>>>> Stashed changes
 
 @router.put("/{employee_id}")
 async def update_employee(

@@ -1243,7 +1243,6 @@ async def get_dropdown_data(
         validate_business_access(business_id, current_user, db)
 
         businesses = db.query(Business).filter(Business.id == business_id).all()
-
         # locations
         loc_q = db.query(Location).filter(Location.business_id == business_id)
         if active is not None and hasattr(Location, 'is_active'):

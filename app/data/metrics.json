@@ -1,22 +1,17 @@
 {
-  "app_start_time": 1770173053.6929693,
-<<<<<<< Updated upstream
-  "api_calls_today": 36,
-  "api_calls_total": 27732,
-=======
-  "api_calls_today": 43,
-  "api_calls_total": 27756,
->>>>>>> Stashed changes
+  "app_start_time": 1779731543.9001875,
+  "api_calls_today": 34,
+  "api_calls_total": 40,
   "data_processed_mb": 0.0,
-  "last_reset_date": "2026-05-25",
+  "last_reset_date": "2026-05-26",
   "security_events": {
-    "failed_logins": 1,
-    "successful_logins": 2,
+    "failed_logins": 0,
+    "successful_logins": 0,
     "blocked_requests": 0,
     "last_security_scan": null
   },
   "database_operations": {
-    "queries_today": 2,
+    "queries_today": 0,
     "inserts_today": 0,
     "updates_today": 0,
     "deletes_today": 0

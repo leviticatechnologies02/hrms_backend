@@ -1,7 +1,8 @@
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status, Query
 from typing import List
 from app.schemas.otp import SendOTPRequest, SendOTPResponse, VerifyOTPRequest, VerifyOTPResponse, ResendOTPRequest
-from app.services.otp_service import send_otp_background, verify_otp, can_resend, register_resend, create_and_save_otp
+from app.services.otp_service import send_otp_background, verify_otp, can_resend, register_resend, create_and_save_otp, get_latest_otp_record, get_latest_otp_record_for_mobile
+from datetime import datetime, timezone
 from app.core.config import settings
 
 router = APIRouter()
@@ -29,6 +30,25 @@ async def send_otp(business_id: int, req: SendOTPRequest, background_tasks: Back
         expires_in=300,
         otp=otp if settings.DEBUG else None,
     )
+
+
+
+@router.get(
+    "/otp/latest/{mobile}",
+    tags=["OTP"],
+    status_code=200
+)
+async def get_latest_otp(business_id: int, mobile: str):
+    """Fetch latest unverified OTP for the given business+mobile and return only the OTP value."""
+    rec = get_latest_otp_record_for_mobile(business_id, mobile)
+    if not rec:
+        return {"success": False, "message": "OTP not found"}
+
+    otp_value = getattr(rec, 'otp', None) if settings.DEBUG else None
+    if not otp_value:
+        return {"success": False, "message": "OTP not found"}
+
+    return {"success": True, "mobile": str(rec.mobile), "otp": str(otp_value)}
 
 
 @router.post("/otp/verify", response_model=VerifyOTPResponse, tags=["OTP"], status_code=200)

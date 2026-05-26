@@ -331,3 +331,51 @@ def register_resend(business_id: int, mobile: str):
     # increment and set expiry 1 hour
     client.incr(counter_key)
     client.expire(counter_key, 3600)
+
+
+def get_latest_otp_record(business_id: int):
+    """Return the latest OTPVerification record for a business (or None)."""
+    db = None
+    try:
+        db = next(get_db())
+        return (
+            db.query(OTPVerification)
+            .filter(OTPVerification.business_id == business_id, OTPVerification.verified == False)
+            .order_by(OTPVerification.id.desc())
+            .first()
+        )
+    except Exception:
+        logger.exception("Failed to fetch latest OTP record")
+        return None
+    finally:
+        if db is not None:
+            try:
+                db.close()
+            except Exception:
+                logger.exception("Failed to close DB session")
+
+
+def get_latest_otp_record_for_mobile(business_id: int, mobile: str):
+    """Return the latest unverified OTPVerification record for a business+mobile (or None)."""
+    db = None
+    try:
+        db = next(get_db())
+        return (
+            db.query(OTPVerification)
+            .filter(
+                OTPVerification.business_id == business_id,
+                OTPVerification.mobile == str(mobile),
+                OTPVerification.verified == False,
+            )
+            .order_by(OTPVerification.id.desc())
+            .first()
+        )
+    except Exception:
+        logger.exception("Failed to fetch latest OTP record for mobile")
+        return None
+    finally:
+        if db is not None:
+            try:
+                db.close()
+            except Exception:
+                logger.exception("Failed to close DB session")

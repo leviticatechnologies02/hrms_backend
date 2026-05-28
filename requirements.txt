@@ -19,6 +19,7 @@ requests==2.32.3
 # ============================================================================
 sqlalchemy==2.0.29                # SQL toolkit and ORM
 psycopg2-binary==2.9.9            # PostgreSQL adapter
+asyncpg==0.29.0                    #
 alembic==1.13.1                   # Database migration tool
 greenlet==3.0.3                   # Lightweight concurrent programming
 

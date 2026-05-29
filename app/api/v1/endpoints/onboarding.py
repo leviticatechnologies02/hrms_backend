@@ -8,7 +8,7 @@ Onboarding API Endpoints - Multi-tenant (business_id) refactor
 """
 
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Path, Body
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Path, Body, UploadFile, File
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, desc, inspect as sa_inspect
 from sqlalchemy.exc import IntegrityError
@@ -16,8 +16,12 @@ from typing import List, Optional
 from datetime import datetime, timedelta, date
 import json
 import logging
+from pathlib import Path as FilePath
+from uuid import uuid4
+import re
 
 from app.core.database import get_db
+from app.core.config import settings
 from app.api.v1.deps import get_current_admin, validate_business_access
 from app.models.user import User
 from app.models.onboarding import (
@@ -52,6 +56,28 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Onboarding"])  # ensure router has Onboarding tag by default
 
+PROFILE_PHOTO_DIR = FilePath(settings.UPLOAD_DIR) / "profile_photos"
+ONBOARDING_DOCUMENTS_DIR = FilePath(settings.UPLOAD_DIR) / "documents"
+ALLOWED_PROFILE_PHOTO_CONTENT_TYPES = {"image/jpeg", "image/png"}
+ALLOWED_PROFILE_PHOTO_EXTENSIONS = {".jpg", ".jpeg", ".png"}
+DOCUMENT_BUCKETS = (
+    "aadhaar_card",
+    "pan_card",
+    "experience_letter",
+    "resume",
+    "payslips",
+)
+DOCUMENT_BUCKET_ALIASES = {
+    "adhar_card": "aadhaar_card",
+    "aadhar_card": "aadhaar_card",
+    "aadhaar_card": "aadhaar_card",
+    "pan_card": "pan_card",
+    "experience_letter": "experience_letter",
+    "resume": "resume",
+    "payslip": "payslips",
+    "payslips": "payslips",
+}
+
 
 # ---------------------------------------------------------------------------
 # Helper validators (business-scoped)
@@ -66,6 +92,330 @@ def validate_form_access(db: Session, form_id: int, business_id: int, current_us
     if not form:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Onboarding form not found")
     return form
+
+
+def _normalize_document_bucket(document_type: str) -> str:
+    normalized = (document_type or "").strip().lower()
+    return DOCUMENT_BUCKET_ALIASES.get(normalized, normalized)
+
+
+def _build_form_submission_payload(submission_data: FormSubmissionCreate) -> dict:
+    payload = submission_data.dict(exclude_none=True)
+
+    if payload.get("mobile") and not payload.get("alternate_mobile"):
+        payload["alternate_mobile"] = payload["mobile"]
+    if payload.get("emergency_contact") and not payload.get("emergency_contact_mobile"):
+        payload["emergency_contact_mobile"] = payload["emergency_contact"]
+
+    allowed_fields = {
+        "first_name",
+        "middle_name",
+        "last_name",
+        "gender",
+        "date_of_birth",
+        "marital_status",
+        "blood_group",
+        "nationality",
+        "personal_email",
+        "alternate_mobile",
+        "present_address",
+        "permanent_address",
+        "pan_number",
+        "aadhaar_number",
+        "bank_name",
+        "account_number",
+        "ifsc_code",
+        "emergency_contact_name",
+        "emergency_contact_relationship",
+        "emergency_contact_mobile",
+        "education_details",
+        "experience_details",
+        "uploaded_documents",
+        "policy_acknowledgments",
+        "ip_address",
+        "user_agent",
+    }
+
+    return {key: value for key, value in payload.items() if key in allowed_fields}
+
+
+def _build_form_submission_response(submission_data: FormSubmissionCreate, submission: FormSubmission) -> dict:
+    response_payload = submission_data.dict()
+    response_payload.update({
+        "id": submission.id,
+        "form_id": submission.form_id,
+        "submitted_at": submission.submitted_at,
+    })
+    return response_payload
+
+
+def _build_candidate_documents_response(db: Session, business_id: int, form_token: str):
+    from app.models.onboarding import CandidateDocument
+
+    documents = {bucket: [] for bucket in DOCUMENT_BUCKETS}
+    records = (
+        db.query(CandidateDocument)
+        .filter(
+            CandidateDocument.business_id == business_id,
+            CandidateDocument.form_token == form_token,
+        )
+        .order_by(CandidateDocument.id.asc())
+        .all()
+    )
+
+    for record in records:
+        bucket = _normalize_document_bucket(record.document_type)
+        if bucket in documents:
+            documents[bucket].append(record.file_path)
+
+    return documents
+from fastapi import (
+    APIRouter,
+    UploadFile,
+    File,
+    HTTPException,
+    Query,
+    Path,
+    Depends,
+    status,
+)
+from sqlalchemy.orm import Session
+from typing import List
+import base64
+
+# your imports
+# from app.db.session import get_db
+# from app.models.onboarding import OnboardingForm, CandidateDocument
+
+router = APIRouter(prefix="/api/v1", tags=["Onboarding"])
+
+
+@router.post("/documents")
+async def upload_onboarding_documents(
+    business_id: int = Path(..., description="Business ID"),
+    form_token: str = Query(..., description="Onboarding form token"),
+    document_name: str = Query(..., description="Document name"),
+    document_type: str = Query(..., description="Document type"),
+    file: List[UploadFile] = File(..., description="Document file(s)"),
+    db: Session = Depends(get_db),
+):
+    """Upload onboarding documents and store real file paths in DB."""
+
+    from app.models.onboarding import CandidateDocument
+
+    # validate onboarding form
+    form = (
+        db.query(OnboardingForm)
+        .filter(
+            OnboardingForm.business_id == business_id,
+            OnboardingForm.form_token == form_token,
+        )
+        .first()
+    )
+
+    if not form:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Onboarding form not found",
+        )
+
+    bucket = _normalize_document_bucket(document_type)
+
+    if bucket not in DOCUMENT_BUCKETS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Invalid document_type '{document_type}'. "
+                f"Allowed values: {', '.join(DOCUMENT_BUCKETS)}"
+            ),
+        )
+
+    if not file:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No files provided",
+        )
+
+    ONBOARDING_DOCUMENTS_DIR.mkdir(parents=True, exist_ok=True)
+    uploaded_files = []
+
+    try:
+        for upload_file in file:
+            # validate filename
+            if not upload_file.filename:
+                raise HTTPException(
+                    status_code=400,
+                    detail="One or more files missing filename",
+                )
+
+            # read file bytes
+            file_contents = await upload_file.read()
+
+            if not file_contents:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"File '{upload_file.filename}' is empty",
+                )
+
+            safe_form_token = re.sub(r"[^A-Za-z0-9_.-]", "_", form_token).strip("._-") or "form"
+            safe_document_type = re.sub(r"[^A-Za-z0-9_.-]", "_", bucket).strip("._-") or "document"
+            original_suffix = FilePath(upload_file.filename).suffix.lower()
+            stored_filename = f"{safe_form_token}_{safe_document_type}_{uuid4().hex}{original_suffix}"
+            stored_file_path = ONBOARDING_DOCUMENTS_DIR / stored_filename
+            stored_file_path_str = str(stored_file_path).replace("\\", "/")
+
+            with open(stored_file_path, "wb") as buffer:
+                buffer.write(file_contents)
+
+            # response list
+            uploaded_files.append(
+                {
+                    "file_name": stored_filename,
+                    "file_path": stored_file_path_str,
+                }
+            )
+
+            # DB record
+            record = CandidateDocument(
+                business_id=business_id,
+                form_token=form_token,
+                document_name=document_name,
+                document_type=bucket,
+                file_path=stored_file_path_str,
+            )
+
+            db.add(record)
+
+        # save
+        db.commit()
+
+        # grouped response
+        documents = _build_candidate_documents_response(
+            db,
+            business_id,
+            form_token,
+        )
+
+        return {
+            "success": True,
+            "business_id": business_id,
+            "form_token": form_token,
+            "documents": documents,
+            "uploaded_files": uploaded_files,
+            "message": "Document uploaded successfully",
+        }
+
+    except HTTPException:
+        db.rollback()
+        raise
+
+    except Exception as exc:
+        db.rollback()
+
+        logger.exception(
+            "Failed to upload onboarding documents"
+        )
+
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to upload document: {str(exc)}",
+        ) from exc
+
+    finally:
+        for upload_file in file:
+            try:
+                await upload_file.close()
+            except Exception:
+                pass
+
+from fastapi import UploadFile, File, HTTPException, Query, Path, status
+from pathlib import Path as FilePath
+from uuid import uuid4
+import base64
+import re
+
+# import your db session + model
+# from app.db.session import SessionLocal
+# from app.models.onboarding import OnboardingCandidate
+
+
+@router.post("/profile-photo")
+async def upload_onboarding_profile_photo(
+    business_id: int = Path(..., description="Business ID"),
+    form_token: str = Query(..., description="Onboarding form token"),
+    profile_photo: UploadFile = File(..., description="Profile photo file"),
+):
+    """Upload onboarding candidate profile photo as Base64 and store in DB."""
+
+    original_filename = profile_photo.filename or ""
+    file_extension = FilePath(original_filename).suffix.lower()
+    content_type = (profile_photo.content_type or "").lower()
+
+    if (
+        content_type not in ALLOWED_PROFILE_PHOTO_CONTENT_TYPES
+        or file_extension not in ALLOWED_PROFILE_PHOTO_EXTENSIONS
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="Only JPG, JPEG, and PNG profile photos are allowed",
+        )
+
+    try:
+        # read uploaded image bytes
+        contents = await profile_photo.read()
+
+        # convert to base64
+        image_base64 = (
+            f"data:{content_type};base64,"
+            + base64.b64encode(contents).decode("utf-8")
+        )
+
+        # ----------------------------
+        # save to database
+        # ----------------------------
+        # db = SessionLocal()
+
+        # candidate = (
+        #     db.query(OnboardingCandidate)
+        #     .filter(
+        #         OnboardingCandidate.business_id == business_id,
+        #         OnboardingCandidate.form_token == form_token
+        #     )
+        #     .first()
+        # )
+
+        # if not candidate:
+        #     raise HTTPException(
+        #         status_code=404,
+        #         detail="Candidate not found"
+        #     )
+
+        # candidate.profile_photo = image_base64
+        # db.commit()
+        # db.refresh(candidate)
+
+        return {
+            "success": True,
+            "business_id": business_id,
+            "form_token": form_token,
+            "file_name": original_filename,
+
+            # returning base64 here
+            "file_path": image_base64,
+
+            "message": "Profile photo uploaded successfully",
+        }
+
+    except Exception as exc:
+        logger.exception("Failed to upload onboarding profile photo")
+
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to upload profile photo: {str(exc)}",
+        ) from exc
+
+    finally:
+        await profile_photo.close()
 
 
 # ---------------------------------------------------------------------------
@@ -1069,13 +1419,14 @@ async def submit_onboarding_form(
             form.status = OnboardingStatus.EXPIRED
             db.commit()
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Onboarding form has expired")
-        submission = FormSubmission(form_id=form_id, **submission_data.dict(), submitted_at=datetime.now())
+        submission_payload = _build_form_submission_payload(submission_data)
+        submission = FormSubmission(form_id=form_id, **submission_payload, submitted_at=datetime.now())
         db.add(submission)
         form.status = OnboardingStatus.SUBMITTED
         form.submitted_at = datetime.now()
         db.commit()
         db.refresh(submission)
-        return submission
+        return _build_form_submission_response(submission_data, submission)
     except HTTPException:
         raise
     except Exception as e:
@@ -2394,13 +2745,14 @@ async def submit_onboarding_form(
             form.status = OnboardingStatus.EXPIRED
             db.commit()
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Onboarding form has expired")
-        submission = FormSubmission(form_id=form_id, **submission_data.dict(), submitted_at=datetime.now())
+        submission_payload = _build_form_submission_payload(submission_data)
+        submission = FormSubmission(form_id=form_id, **submission_payload, submitted_at=datetime.now())
         db.add(submission)
         form.status = OnboardingStatus.SUBMITTED
         form.submitted_at = datetime.now()
         db.commit()
         db.refresh(submission)
-        return submission
+        return _build_form_submission_response(submission_data, submission)
     except HTTPException:
         raise
     except Exception as e:
@@ -2796,23 +3148,6 @@ async def get_settings_frontend_format(
         validate_business_access(business_id, current_user, db)
         service = OnboardingService(db)
         return service.get_settings_frontend_format(business_id, current_user.id)
-    except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
-
-
-@router.post("/settings/update-document", response_model=dict)
-async def update_document_requirement(
-    business_id: int = Path(..., description="Business ID"),
-    update_data: DocumentRequirementUpdateRequest = None,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_admin)
-):
-    try:
-        validate_business_access(business_id, current_user, db)
-        service = OnboardingService(db)
-        return service.update_document_requirement(business_id, update_data.document_type, update_data.is_required, current_user.id)
-    except HTTPException:
-        raise
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 

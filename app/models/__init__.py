@@ -118,6 +118,8 @@ __all__ = [
     "PayrollRecord",
     "SeparationRequest",
     "OnboardingForm",
+    "OnboardingDocument",
+    "CandidateDocument",
     "AttendanceSettings",
     "ESISettings",
     "ESIComponentMapping",
@@ -267,7 +269,7 @@ from .attendance import AttendanceRecord
 from .payroll import PayrollRecord, PayrollPeriod, PayrollRecalculation
 from .separation import SeparationRequest
 from .master_policy import MasterPolicy, FormPolicyMapping
-from .onboarding import OnboardingForm
+from .onboarding import OnboardingForm, OnboardingDocument, CandidateDocument
 from .business import Business
 from .business_unit import BusinessUnit
 from .location import Location

@@ -154,6 +154,19 @@ class OnboardingDocument(Base):
     form = relationship("OnboardingForm", back_populates="documents")
     uploader = relationship("User")
 
+class CandidateDocument(Base):
+    __tablename__ = "candidate_documents"
+
+    id = Column(Integer, primary_key=True, index=True)
+    business_id = Column(Integer, ForeignKey("businesses.id"), nullable=False, index=True)
+    form_token = Column(String, nullable=False)
+    document_name = Column(String, nullable=False)
+    document_type = Column(String, nullable=False)
+
+    # Base64 needs Text
+    file_path = Column(Text, nullable=False)
+    business = relationship("Business")
+
 
 class OnboardingPolicy(Base):
     """Policies attached to onboarding forms"""

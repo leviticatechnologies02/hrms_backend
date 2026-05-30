@@ -8,6 +8,7 @@ from pydantic import ConfigDict, EmailStr, field_validator
 from typing import List, Optional
 from urllib.parse import quote_plus
 from dotenv import load_dotenv
+import json
 import os
 
 # Load .env file explicitly
@@ -126,7 +127,23 @@ class Settings(BaseSettings):
 
     @property
     def backend_cors_origins_list(self) -> List[str]:
-        return [origin.strip() for origin in self.BACKEND_CORS_ORIGINS.split(",") if origin.strip()]
+        raw_value = (self.BACKEND_CORS_ORIGINS or "").strip()
+        if not raw_value:
+            return []
+
+        if raw_value.startswith("[") and raw_value.endswith("]"):
+            try:
+                parsed = json.loads(raw_value)
+                if isinstance(parsed, list):
+                    return [str(origin).strip().strip("\"'") for origin in parsed if str(origin).strip()]
+            except (json.JSONDecodeError, ValueError, TypeError):
+                pass
+
+        return [
+            origin.strip().strip("\"'")
+            for origin in raw_value.split(",")
+            if origin.strip().strip("\"'")
+        ]
     
     # File upload settings
     MAX_FILE_SIZE: int = 4 * 1024 * 1024

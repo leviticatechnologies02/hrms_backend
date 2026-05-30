@@ -30,6 +30,13 @@ from app.services.email_service import email_service
 logger = logging.getLogger(__name__)
 
 
+def _email_send_timeout_seconds() -> int:
+    """Use a sane minimum timeout so Gmail SMTP handshakes can complete."""
+    configured_timeout = int(getattr(settings, "EMAIL_SEND_TIMEOUT", 30) or 30)
+    smtp_timeout = int(getattr(settings, "SMTP_TIMEOUT", 30) or 30)
+    return max(configured_timeout, smtp_timeout, 15)
+
+
 class RegistrationService:
     """
     Handles admin self-registration with email verification.
@@ -118,7 +125,7 @@ class RegistrationService:
                                 user_name=full_name,
                                 otp=otp
                             ),
-                            timeout=settings.EMAIL_SEND_TIMEOUT
+                            timeout=_email_send_timeout_seconds()
                         )
                         logger.info(f"OTP re-sent during re-registration: {existing_user.email}")
                     except asyncio.TimeoutError:
@@ -194,7 +201,7 @@ class RegistrationService:
                         user_name=full_name,
                         otp=otp
                     ),
-                    timeout=settings.EMAIL_SEND_TIMEOUT
+                    timeout=_email_send_timeout_seconds()
                 )
                 logger.info(f"OTP email sent to {new_user.email}")
             except asyncio.TimeoutError:
@@ -320,7 +327,7 @@ class RegistrationService:
                         user_name=user.name,
                         otp=new_otp
                     ),
-                    timeout=settings.EMAIL_SEND_TIMEOUT
+                    timeout=_email_send_timeout_seconds()
                 )
             except asyncio.TimeoutError:
                 logger.warning(f"Email timeout for {user.email}")

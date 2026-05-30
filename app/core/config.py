@@ -72,25 +72,23 @@ class Settings(BaseSettings):
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
     
     # ============================================================================
-    # SENDGRID SMTP CONFIGURATION
+    # SMTP CONFIGURATION
     # ============================================================================
-    SMTP_HOST: str = "smtp.sendgrid.net"
-    SMTP_PORT: int = 2525
-    SMTP_USE_TLS: bool = False
-    SMTP_USE_STARTTLS: bool = True
+    SMTP_HOST: str = os.getenv("SMTP_HOST", "smtp.gmail.com")
+    SMTP_PORT: int = int(os.getenv("SMTP_PORT", "587"))
+    SMTP_USE_TLS: bool = os.getenv("SMTP_USE_TLS", "False").lower() == "true"
+    SMTP_USE_STARTTLS: bool = os.getenv("SMTP_USE_STARTTLS", "True").lower() == "true"
 
-    # IMPORTANT: SendGrid uses "apikey" as username
-    SMTP_USERNAME: str = "apikey"
+    SMTP_USERNAME: str = os.getenv("SMTP_USERNAME", "nagendrareddy1017@gmail.com")
 
-    # Load API key from .env
-    SMTP_PASSWORD: str = os.getenv("SENDGRID_API_KEY")
+    # Gmail app passwords are often shown with spaces; normalize them here.
+    SMTP_PASSWORD: str = os.getenv("SMTP_PASSWORD")
 
-    # Sender email (must be verified in SendGrid)
-    SMTP_FROM_EMAIL: str = os.getenv("SMTP_FROM_EMAIL")
-    SMTP_FROM_NAME: str = "DCM by Levitica Technologies Pvt. Ltd."
+    SMTP_FROM_EMAIL: str = os.getenv("SMTP_FROM_EMAIL", "nagendrareddy1017@gmail.com")
+    SMTP_FROM_NAME: str = os.getenv("SMTP_FROM_NAME", "Levitica HRMS")
 
-    SMTP_TIMEOUT: int = 30
-    EMAIL_SEND_TIMEOUT: int = 30
+    SMTP_TIMEOUT: int = int(os.getenv("SMTP_TIMEOUT", "30"))
+    EMAIL_SEND_TIMEOUT: int = int(os.getenv("EMAIL_SEND_TIMEOUT", "30"))
     
     # SMS Configuration
     SMS_PROVIDER: str = "twilio"  # Options: 'twilio', 'msg91', 'fast2sms'
@@ -194,7 +192,7 @@ class Settings(BaseSettings):
         if not value or not value.strip():
             import warnings
             warnings.warn("SMTP_PASSWORD is empty. Email functionality will not work.")
-        return value
+        return value.replace(" ", "").strip()
     
     def is_smtp_configured(self) -> bool:
         return bool(

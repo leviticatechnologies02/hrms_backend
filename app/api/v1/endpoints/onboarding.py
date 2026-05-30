@@ -187,7 +187,7 @@ import base64
 # from app.db.session import get_db
 # from app.models.onboarding import OnboardingForm, CandidateDocument
 
-router = APIRouter(prefix="/api/v1", tags=["Onboarding"])
+router = APIRouter(tags=["Onboarding"])
 
 
 @router.post("/documents")

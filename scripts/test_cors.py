@@ -24,7 +24,7 @@ def test_cors():
     
     print(f"\nFrontend Origin: {origin}")
     print(f"Backend URL: {base_url}")
-    print(f"Allowed Origins: {settings.BACKEND_CORS_ORIGINS}")
+    print(f"Allowed Origins: {settings.backend_cors_origins_list}")
     
     # Test 1: Simple health check
     print("\n" + "-" * 70)

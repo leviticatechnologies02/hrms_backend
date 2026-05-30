@@ -5,10 +5,9 @@ Manages environment variables and application settings
 
 from pydantic_settings import BaseSettings
 from pydantic import ConfigDict, EmailStr, field_validator
-from typing import List, Union, Optional
+from typing import List, Optional
 from urllib.parse import quote_plus
 from dotenv import load_dotenv
-import json
 import os
 
 # Load .env file explicitly
@@ -121,28 +120,13 @@ class Settings(BaseSettings):
 
     def is_brevo_configured(self) -> bool:
         return bool(self.BREVO_API_KEY and self.BREVO_SENDER_EMAIL)
-    
-    # CORS settings
-    BACKEND_CORS_ORIGINS: Union[str, List[str]] = [
-        "http://localhost:3000",
-        "http://localhost:3001",
-        "http://127.0.0.1:3000",
-    ]
-    
-    @field_validator('BACKEND_CORS_ORIGINS', mode='before')
-    @classmethod
-    def parse_cors_origins(cls, value) -> List[str]:
-        if isinstance(value, str):
-            try:
-                parsed = json.loads(value)
-                if isinstance(parsed, list):
-                    return parsed
-            except (json.JSONDecodeError, ValueError):
-                pass
-            return [origin.strip() for origin in value.split(',') if origin.strip()]
-        if isinstance(value, list):
-            return value
-        return ["http://localhost:3000", "http://127.0.0.1:3000"]
+
+    # CORS settings stored as a comma-separated string to keep .env parsing simple
+    BACKEND_CORS_ORIGINS: str = "http://localhost:3000,http://localhost:3001,http://127.0.0.1:3000,https://levitica-hr-frontend.onrender.com"
+
+    @property
+    def backend_cors_origins_list(self) -> List[str]:
+        return [origin.strip() for origin in self.BACKEND_CORS_ORIGINS.split(",") if origin.strip()]
     
     # File upload settings
     MAX_FILE_SIZE: int = 4 * 1024 * 1024

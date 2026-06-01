@@ -91,9 +91,6 @@ class CreateOnboardingSchema(BaseModel):
 
     policies: List[int] = []
 
-    offer_letter: OfferLetterSchema
-
-    salary_options: SalaryOptionsSchema
 
 
 class UpdateOnboardingSchema(CreateOnboardingSchema):
@@ -117,8 +114,7 @@ class OnboardingResponseSchema(CreateOnboardingSchema):
     rejection_reason: Optional[str] = None
     # Response may come from DB where nested objects are not stored yet
     policies: List[int] = []
-    offer_letter: Optional[OfferLetterSchema] = None
-    salary_options: Optional[SalaryOptionsSchema] = None
+
 
     class Config:
         from_attributes = True
@@ -133,8 +129,7 @@ class OnboardingResponseSchema(CreateOnboardingSchema):
                 "verify_aadhaar": False,
                 "notes": "string",
                 "policies": { },
-                "offer_letter": { },
-                "salary_options": { },
+
                 "id": 0,
                 "business_id": 0,
                 "form_token": "string",

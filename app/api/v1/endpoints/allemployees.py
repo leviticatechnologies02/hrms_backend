@@ -1312,7 +1312,9 @@ async def get_employees_list(
         from app.models.employee import EmployeeStatus
         employees = db.query(Employee).options(
             joinedload(Employee.designation),
-            joinedload(Employee.profile)
+            joinedload(Employee.profile),
+            joinedload(Employee.department),
+            joinedload(Employee.location)
         ).filter(
             Employee.business_id == business_id,
             Employee.employee_status == EmployeeStatus.ACTIVE
@@ -1329,6 +1331,14 @@ async def get_employees_list(
             designation = "No designation"
             if emp.designation and hasattr(emp.designation, 'name'):
                 designation = emp.designation.name
+
+            department = None
+            if emp.department and hasattr(emp.department, 'name'):
+                department = emp.department.name
+
+            location = None
+            if emp.location and hasattr(emp.location, 'name'):
+                location = emp.location.name
             
             employee_list.append({
                 "id": emp.id,
@@ -1337,7 +1347,10 @@ async def get_employees_list(
                 "employee_code": employee_code,
                 "business_id": emp.business_id,
                 "email": emp.email or "",
-                "designation": designation
+                "designation": designation,
+                "department": department,
+                "location": location,
+                "joining_date": emp.date_of_joining.isoformat() if emp.date_of_joining else None
             })
         
         return {

@@ -328,7 +328,7 @@ async def upload_onboarding_documents(
             except Exception:
                 pass
 
-from fastapi import UploadFile, File, HTTPException, Query, Path, status
+from fastapi import UploadFile, File, HTTPException, Query, Path, status, Request
 from pathlib import Path as FilePath
 from uuid import uuid4
 import base64
@@ -341,11 +341,12 @@ import re
 
 @router.post("/profile-photo")
 async def upload_onboarding_profile_photo(
+    request: Request,
     business_id: int = Path(..., description="Business ID"),
     form_token: str = Query(..., description="Onboarding form token"),
     profile_photo: UploadFile = File(..., description="Profile photo file"),
 ):
-    """Upload onboarding candidate profile photo as Base64 and store in DB."""
+    """Upload onboarding candidate profile photo, save locally and return file path."""
 
     original_filename = profile_photo.filename or ""
     file_extension = FilePath(original_filename).suffix.lower()
@@ -364,45 +365,31 @@ async def upload_onboarding_profile_photo(
         # read uploaded image bytes
         contents = await profile_photo.read()
 
-        # convert to base64
-        image_base64 = (
-            f"data:{content_type};base64,"
-            + base64.b64encode(contents).decode("utf-8")
-        )
+        # Ensure upload directory exists
+        PROFILE_PHOTO_DIR.mkdir(parents=True, exist_ok=True)
 
-        # ----------------------------
-        # save to database
-        # ----------------------------
-        # db = SessionLocal()
+        # Save the file locally
+        safe_form_token = re.sub(r"[^A-Za-z0-9_.-]", "_", form_token).strip("._-") or "profile"
+        stored_filename = f"photo_{safe_form_token}_{uuid4().hex}{file_extension}"
+        stored_file_path = PROFILE_PHOTO_DIR / stored_filename
+        stored_file_path_str = str(stored_file_path).replace("\\", "/")
 
-        # candidate = (
-        #     db.query(OnboardingCandidate)
-        #     .filter(
-        #         OnboardingCandidate.business_id == business_id,
-        #         OnboardingCandidate.form_token == form_token
-        #     )
-        #     .first()
-        # )
+        # Format as absolute URL
+        base_url = str(request.base_url)
+        if not base_url.endswith("/"):
+            base_url += "/"
+        relative_path = stored_file_path_str.lstrip("/")
+        full_url = f"{base_url}{relative_path}"
 
-        # if not candidate:
-        #     raise HTTPException(
-        #         status_code=404,
-        #         detail="Candidate not found"
-        #     )
-
-        # candidate.profile_photo = image_base64
-        # db.commit()
-        # db.refresh(candidate)
+        with open(stored_file_path, "wb") as buffer:
+            buffer.write(contents)
 
         return {
             "success": True,
             "business_id": business_id,
             "form_token": form_token,
             "file_name": original_filename,
-
-            # returning base64 here
-            "file_path": image_base64,
-
+            "file_path": full_url,
             "message": "Profile photo uploaded successfully",
         }
 
@@ -1111,7 +1098,55 @@ async def get_offer_letters(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-# Policy templates removed: use master/policies endpoints instead
+@router.get("/policy-templates", response_model=List[dict])
+async def get_policy_templates(
+    business_id: int = Path(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_admin)
+):
+    validate_business_access(business_id, current_user, db)
+    try:
+        from app.models.master_policy import MasterPolicy
+        policies = db.query(MasterPolicy).filter(MasterPolicy.business_id == business_id).all()
+        
+        if not policies:
+            # Auto-create some default master policies for this business so they can be attached and used without error
+            default_policies = [
+                {"name": "Employee Handbook", "description": "Complete guide to company policies and procedures", "type": "handbook", "is_mandatory": True, "requires_acknowledgment": True},
+                {"name": "Code of Conduct", "description": "Professional behavior and ethical guidelines", "type": "conduct", "is_mandatory": True, "requires_acknowledgment": True},
+                {"name": "IT Security Policy", "description": "Information technology security guidelines and requirements", "type": "it_security", "is_mandatory": True, "requires_acknowledgment": True},
+                {"name": "Remote Work Policy", "description": "Guidelines for remote work arrangements", "type": "remote_work", "is_mandatory": False, "requires_acknowledgment": True},
+                {"name": "Leave Policy", "description": "Annual leave, sick leave, and other time-off policies", "type": "leave", "is_mandatory": True, "requires_acknowledgment": True},
+                {"name": "Health & Safety Policy", "description": "Workplace health and safety guidelines", "type": "health_safety", "is_mandatory": True, "requires_acknowledgment": True}
+            ]
+            for dp in default_policies:
+                new_policy = MasterPolicy(
+                    business_id=business_id,
+                    name=dp["name"],
+                    description=dp["description"],
+                    type=dp["type"],
+                    is_mandatory=dp["is_mandatory"],
+                    requires_acknowledgment=dp["requires_acknowledgment"],
+                    created_by=current_user.id
+                )
+                db.add(new_policy)
+            db.commit()
+            policies = db.query(MasterPolicy).filter(MasterPolicy.business_id == business_id).all()
+
+        return [
+            {
+                "id": p.id,
+                "name": p.name,
+                "description": p.description or "",
+                "type": p.type or "other",
+                "is_mandatory": bool(p.is_mandatory),
+                "requires_acknowledgment": bool(p.requires_acknowledgment),
+                "file_path": p.file_path or ""
+            }
+            for p in policies
+        ]
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
 @router.post("/{form_id}/attach-policies", response_model=AttachPoliciesResponse)
@@ -2317,7 +2352,55 @@ async def get_offer_letters(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-# Policy templates endpoint removed — master policies should be used
+@router.get("/policy-templates", response_model=List[dict])
+async def get_policy_templates(
+    business_id: int = Path(..., description="Business ID"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_admin)
+):
+    try:
+        validate_business_access(business_id, current_user, db)
+        from app.models.master_policy import MasterPolicy
+        policies = db.query(MasterPolicy).filter(MasterPolicy.business_id == business_id).all()
+        
+        if not policies:
+            # Auto-create some default master policies for this business so they can be attached and used without error
+            default_policies = [
+                {"name": "Employee Handbook", "description": "Complete guide to company policies and procedures", "type": "handbook", "is_mandatory": True, "requires_acknowledgment": True},
+                {"name": "Code of Conduct", "description": "Professional behavior and ethical guidelines", "type": "conduct", "is_mandatory": True, "requires_acknowledgment": True},
+                {"name": "IT Security Policy", "description": "Information technology security guidelines and requirements", "type": "it_security", "is_mandatory": True, "requires_acknowledgment": True},
+                {"name": "Remote Work Policy", "description": "Guidelines for remote work arrangements", "type": "remote_work", "is_mandatory": False, "requires_acknowledgment": True},
+                {"name": "Leave Policy", "description": "Annual leave, sick leave, and other time-off policies", "type": "leave", "is_mandatory": True, "requires_acknowledgment": True},
+                {"name": "Health & Safety Policy", "description": "Workplace health and safety guidelines", "type": "health_safety", "is_mandatory": True, "requires_acknowledgment": True}
+            ]
+            for dp in default_policies:
+                new_policy = MasterPolicy(
+                    business_id=business_id,
+                    name=dp["name"],
+                    description=dp["description"],
+                    type=dp["type"],
+                    is_mandatory=dp["is_mandatory"],
+                    requires_acknowledgment=dp["requires_acknowledgment"],
+                    created_by=current_user.id
+                )
+                db.add(new_policy)
+            db.commit()
+            policies = db.query(MasterPolicy).filter(MasterPolicy.business_id == business_id).all()
+
+        return [
+            {
+                "id": p.id,
+                "name": p.name,
+                "description": p.description or "",
+                "type": p.type or "other",
+                "is_mandatory": bool(p.is_mandatory),
+                "requires_acknowledgment": bool(p.requires_acknowledgment),
+                "file_path": p.file_path or ""
+            }
+            for p in policies
+        ]
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
 @router.post("/{form_id}/attach-policies", response_model=AttachPoliciesResponse)

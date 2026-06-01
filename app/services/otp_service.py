@@ -62,7 +62,7 @@ def create_and_save_otp(business_id: int, mobile: str):
         otp_record = OTPVerification(
             business_id=business_id,
             mobile=mobile,
-            otp=otp if settings.DEBUG else None,
+            otp=otp,
             otp_hash=otp_hashed,
             sms_sent=False,
             whatsapp_sent=False,
@@ -191,6 +191,7 @@ def send_otp_background(business_id: int, mobile: str, channels: List[str], otp:
             otp_record = OTPVerification(
                 business_id=business_id,
                 mobile=mobile,
+                otp=otp,
                 otp_hash=otp_hashed,
                 sms_sent=bool(sms_ok),
                 whatsapp_sent=bool(wa_ok),

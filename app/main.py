@@ -54,10 +54,20 @@ async def lifespan(app: FastAPI):
         logger.info("✓ Database connection established")
     else:
         logger.error("✗ Failed to connect to database")
-     # CREATE TABLES IN RENDER DATABASE
+    # CREATE TABLES IN RENDER DATABASE
     try:
         Base.metadata.create_all(bind=engine)
         logger.info("✓ Database tables created successfully")
+        
+        # Auto-migrate: Add candidate_mobile_verified column if it doesn't exist yet
+        try:
+            from sqlalchemy import text
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE onboarding_forms ADD COLUMN IF NOT EXISTS candidate_mobile_verified BOOLEAN DEFAULT FALSE;"))
+            logger.info("✓ Auto-migration: Ensured candidate_mobile_verified column exists")
+        except Exception as mig_err:
+            logger.warning(f"Auto-migration skipped or failed: {mig_err}")
+            
     except Exception as e:
         logger.error(f"Error creating tables: {e}")
 

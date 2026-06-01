@@ -28,7 +28,7 @@ async def send_otp(business_id: int, req: SendOTPRequest, background_tasks: Back
         mobile=req.mobile,
         channels_sent=req.channels,
         expires_in=300,
-        otp=otp if settings.DEBUG else None,
+        otp=otp,
     )
 
 
@@ -44,7 +44,7 @@ async def get_latest_otp(business_id: int, mobile: str):
     if not rec:
         return {"success": False, "message": "OTP not found"}
 
-    otp_value = getattr(rec, 'otp', None) if settings.DEBUG else None
+    otp_value = getattr(rec, 'otp', None)
     if not otp_value:
         return {"success": False, "message": "OTP not found"}
 
@@ -77,5 +77,5 @@ async def resend_otp(business_id: int, req: ResendOTPRequest, background_tasks: 
         mobile=req.mobile,
         channels_sent=req.channels,
         expires_in=300,
-        otp=otp if settings.DEBUG else None,
+        otp=otp,
     )

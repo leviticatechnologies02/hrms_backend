@@ -52,6 +52,7 @@ class OnboardingForm(Base):
     verify_pan = Column(Boolean, default=False)
     verify_bank = Column(Boolean, default=False)
     verify_aadhaar = Column(Boolean, default=False)
+    candidate_mobile_verified = Column(Boolean, default=False)
     
     # Workflow timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now())

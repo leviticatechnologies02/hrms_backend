@@ -263,6 +263,28 @@ def verify_otp(business_id: int, otp: str) -> Tuple[bool, str]:
             db.add(rec)
             db.commit()
             print("✅ OTP UPDATED (verified):", rec.id)
+
+            # Also update the matching OnboardingForm's candidate_mobile_verified flag
+            try:
+                from app.models.onboarding import OnboardingForm
+                matching_form = (
+                    db.query(OnboardingForm)
+                    .filter(
+                        OnboardingForm.business_id == business_id,
+                        OnboardingForm.candidate_mobile.contains(rec.mobile),
+                        OnboardingForm.candidate_mobile_verified == False,
+                    )
+                    .order_by(OnboardingForm.created_at.desc())
+                    .first()
+                )
+                if matching_form:
+                    matching_form.candidate_mobile_verified = True
+                    db.add(matching_form)
+                    db.commit()
+                    print("✅ OnboardingForm mobile_verified updated:", matching_form.id)
+            except Exception as e:
+                logger.warning(f"Could not update OnboardingForm mobile_verified: {e}")
+
             return True, "OTP verified"
         except Exception as e:
             try:

@@ -112,6 +112,7 @@ class OnboardingResponseSchema(CreateOnboardingSchema):
     expires_at: Optional[datetime] = None
 
     rejection_reason: Optional[str] = None
+    candidate_mobile_verified: bool = False
     # Response may come from DB where nested objects are not stored yet
     policies: List[int] = []
 
@@ -140,7 +141,8 @@ class OnboardingResponseSchema(CreateOnboardingSchema):
                 "approved_at": "2026-05-19T17:08:09.875Z",
                 "rejected_at": "2026-05-19T17:08:09.875Z",
                 "expires_at": "2026-05-19T17:08:09.875Z",
-                "rejection_reason": "string"
+                "rejection_reason": "string",
+                "candidate_mobile_verified": False
             }
         }
 

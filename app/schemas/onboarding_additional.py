@@ -475,15 +475,20 @@ class FormCreateRequest(BaseModel):
 class FinalizeAndSendRequest(BaseModel):
     """Schema for finalizing and sending onboarding form"""
     
+    candidate_email: Optional[EmailStr] = Field(
+        default=None,
+        description="Candidate email address",
+        example="chandupatel.1434@gmail.com"
+    )
     send_email: Optional[bool] = Field(
         default=True,
         description="Whether to send email notification",
         example=True
     )
     custom_message: Optional[str] = Field(
-        default=None,
+        default="Welcome to our company!",
         description="Custom message for candidate",
-        example="Welcome aboard!"
+        example="Welcome to our company!"
     )
     include_offer_letter: Optional[bool] = Field(
         default=True,
@@ -499,8 +504,9 @@ class FinalizeAndSendRequest(BaseModel):
     class Config:
         json_schema_extra = {
             "example": {
+                "candidate_email": "chandupatel.1434@gmail.com",
+                "custom_message": "Welcome to our company!",
                 "send_email": True,
-                "custom_message": "Welcome aboard!",
                 "include_offer_letter": True,
                 "include_policies": True
             }

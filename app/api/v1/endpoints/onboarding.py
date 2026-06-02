@@ -930,7 +930,7 @@ async def generate_complete_offer_letter(
 
         business = db.query(User).filter(User.id == current_user.id).first()
         template_variables = {
-            "company_name": business.name if business else "Company",
+            "company_name": getattr(business, 'business_name', 'Company') if business else "Company",
             "company_address": getattr(business, 'address', '') if business else "",
             "offer_date": datetime.now().strftime("%d-%b-%Y"),
             "candidate_name": form.candidate_name or "",
@@ -1440,6 +1440,72 @@ async def skip_offer_letter(
             user_id=current_user.id,
         )
         return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@router.post(
+    "/{form_id}/finalize",
+    response_model=OnboardingResponseSchema,
+    summary="Finalize onboarding form and optionally send onboarding email"
+)
+async def finalize_onboarding_form(
+    business_id: int = Path(..., description="Business ID"),
+    form_id: int = Path(..., description="Form ID"),
+    payload: FinalizeAndSendRequest = Body(..., description="Finalize payload"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_admin)
+):
+    """
+    Finalize the onboarding form creation process.
+    - Updates candidate email if provided in the payload.
+    - Sets the status to 'SENT'.
+    - If `send_email` is true, sends an onboarding email with the link to the candidate.
+    """
+    validate_business_access(business_id, current_user, db)
+    try:
+        form = validate_form_access(db, form_id, business_id, current_user)
+        
+        # 1. Update candidate email if provided in payload
+        if payload.candidate_email:
+            form.candidate_email = payload.candidate_email
+            
+        # 2. Finalize status and timestamp
+        form.status = OnboardingStatus.SENT
+        form.sent_at = datetime.now()
+        form.updated_at = datetime.now()
+        db.commit()
+        db.refresh(form)
+        
+        # 3. Send email if requested
+        if payload.send_email:
+            from app.services.email_service import EmailService
+            from app.models.business import Business
+            
+            business = db.query(Business).filter(Business.id == business_id).first()
+            company_name = business.business_name if business else "Levitica Technologies"
+            
+            # Check if policies are attached
+            has_policies = db.query(FormPolicyMapping).filter(FormPolicyMapping.form_id == form.id).count() > 0
+            
+            email_service = EmailService()
+            email_sent = await email_service.send_onboarding_form_email(
+                candidate_email=form.candidate_email,
+                candidate_name=form.candidate_name,
+                form_id=form.id,
+                form_token=form.form_token,
+                candidate_mobile=form.candidate_mobile,
+                has_policies=has_policies,
+                has_offer_letter=bool(payload.include_offer_letter),
+                company_name=company_name
+            )
+            if not email_sent:
+                logger.warning(f"Failed to send onboarding email to {form.candidate_email}")
+                
+        return form
     except HTTPException:
         raise
     except Exception as e:

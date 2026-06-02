@@ -1469,6 +1469,169 @@ async def submit_onboarding_form(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
+@router.get("/{form_id}/reviewform", response_model=dict, summary="Review submitted onboarding form")
+async def review_onboarding_form(
+    business_id: int = Path(..., description="Business ID"),
+    form_id: int = Path(..., description="Form ID"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_admin),
+):
+    """
+    Get the full onboarding form details along with submitted candidate data for review.
+    Returns form metadata, candidate info, and all submission fields grouped by step.
+    """
+    validate_business_access(business_id, current_user, db)
+    try:
+        form = validate_form_access(db, form_id, business_id, current_user)
+
+        # Get the latest submission for this form
+        submission = (
+            db.query(FormSubmission)
+            .filter(FormSubmission.form_id == form_id)
+            .order_by(FormSubmission.id.desc())
+            .first()
+        )
+
+        # Build form overview
+        form_overview = {
+            "form_id": form.id,
+            "form_token": form.form_token,
+            "status": form.status.value,
+            "candidate_name": form.candidate_name,
+            "candidate_email": form.candidate_email,
+            "candidate_mobile": form.candidate_mobile,
+            "candidate_mobile_verified": bool(getattr(form, "candidate_mobile_verified", False)),
+            "verify_mobile": form.verify_mobile,
+            "verify_pan": form.verify_pan,
+            "verify_bank": form.verify_bank,
+            "verify_aadhaar": form.verify_aadhaar,
+            "notes": form.notes,
+            "created_at": form.created_at.isoformat() if form.created_at else None,
+            "sent_at": form.sent_at.isoformat() if form.sent_at else None,
+            "submitted_at": form.submitted_at.isoformat() if form.submitted_at else None,
+            "approved_at": form.approved_at.isoformat() if form.approved_at else None,
+            "rejected_at": form.rejected_at.isoformat() if form.rejected_at else None,
+            "expires_at": form.expires_at.isoformat() if form.expires_at else None,
+            "rejection_reason": form.rejection_reason,
+        }
+
+        if not submission:
+            return {
+                "success": True,
+                "form": form_overview,
+                "has_submission": False,
+                "submission": None,
+            }
+
+        # Parse JSON fields safely
+        def _safe_json_parse(value):
+            if not value:
+                return None
+            if isinstance(value, (dict, list)):
+                return value
+            try:
+                return json.loads(value)
+            except (json.JSONDecodeError, TypeError):
+                return value
+
+        # Build structured submission data grouped by steps
+        submission_data = {
+            "id": submission.id,
+            "submitted_at": submission.submitted_at.isoformat() if submission.submitted_at else None,
+
+            # Step 2: Basic Details
+            "basic_details": {
+                "first_name": submission.first_name,
+                "middle_name": submission.middle_name,
+                "last_name": submission.last_name,
+                "gender": submission.gender,
+                "date_of_birth": submission.date_of_birth.isoformat() if submission.date_of_birth else None,
+            },
+
+            # Step 3: Contact Details
+            "contact_details": {
+                "personal_email": submission.personal_email,
+                "alternate_mobile": submission.alternate_mobile,
+            },
+
+            # Step 4: Personal Details
+            "personal_details": {
+                "blood_group": submission.blood_group,
+                "nationality": submission.nationality,
+                "marital_status": submission.marital_status,
+            },
+
+            # Step 5: Statutory Details
+            "statutory_details": {
+                "pan_number": submission.pan_number,
+                "aadhaar_number": submission.aadhaar_number,
+            },
+
+            # Step 6: Emergency Contact
+            "emergency_contact": {
+                "name": submission.emergency_contact_name,
+                "relationship": submission.emergency_contact_relationship,
+                "mobile": submission.emergency_contact_mobile,
+            },
+
+            # Step 7 & 8: Address Details
+            "present_address": submission.present_address,
+            "permanent_address": submission.permanent_address,
+
+            # Step 9: Bank Details
+            "bank_details": {
+                "bank_name": submission.bank_name,
+                "account_number": submission.account_number,
+                "ifsc_code": submission.ifsc_code,
+            },
+
+            # Step 10: Education & Experience
+            "education_details": _safe_json_parse(submission.education_details),
+            "experience_details": _safe_json_parse(submission.experience_details),
+
+            # Documents
+            "uploaded_documents": _safe_json_parse(submission.uploaded_documents),
+
+            # Policy Acknowledgments
+            "policy_acknowledgments": _safe_json_parse(submission.policy_acknowledgments),
+
+            # System info
+            "ip_address": submission.ip_address,
+            "user_agent": submission.user_agent,
+        }
+
+        # Also fetch attached policies for this form
+        from app.models.master_policy import FormPolicyMapping, MasterPolicy
+        policy_mappings = (
+            db.query(FormPolicyMapping)
+            .filter(FormPolicyMapping.form_id == form_id)
+            .all()
+        )
+        attached_policies = []
+        for pm in policy_mappings:
+            policy = db.query(MasterPolicy).filter(MasterPolicy.id == pm.policy_id).first()
+            if policy:
+                attached_policies.append({
+                    "id": policy.id,
+                    "name": policy.name,
+                    "description": policy.description or "",
+                    "type": policy.type or "other",
+                    "is_mandatory": bool(policy.is_mandatory),
+                })
+
+        return {
+            "success": True,
+            "form": form_overview,
+            "has_submission": True,
+            "submission": submission_data,
+            "attached_policies": attached_policies,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
 @router.post("/{form_id}/approve", response_model=OnboardingResponseSchema)
 async def approve_onboarding_form(
     business_id: int = Path(...),

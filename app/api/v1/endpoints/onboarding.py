@@ -1407,6 +1407,46 @@ async def delete_onboarding_form(
 # ---------------------------------------------------------------------------
 # Send / Submit / Approve / Reject endpoints
 # ---------------------------------------------------------------------------
+
+@router.post(
+    "/{form_id}/skip-offer-letter",
+    response_model=SkipOfferLetterResponse,
+    summary="Create or update onboarding form skipping offer letter",
+)
+async def skip_offer_letter(
+    business_id: int = Path(..., description="Business ID"),
+    form_id: int = Path(..., description="Form ID"),
+    form_data: SkipOfferLetterRequest = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_admin),
+):
+    """
+    Create or update an onboarding form while skipping offer letter generation.
+
+    - If a form with the given `form_id` exists for the business, it is updated.
+    - If not found, a new form is created.
+    - Policies (list of master policy IDs) are attached/replaced for the form.
+    - `offer_letter` and `salary_options` fields are accepted in the payload but ignored
+      (they are skipped intentionally).
+    - `candidate_mobile_verified` defaults to `false`.
+    """
+    validate_business_access(business_id, current_user, db)
+    try:
+        service = OnboardingService(db)
+        result = service.create_or_update_onboarding_skip_offer_letter(
+            form_id=form_id,
+            form_data=form_data,
+            business_id=business_id,
+            user_id=current_user.id,
+        )
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
 @router.post("/{form_id}/send", response_model=OnboardingResponseSchema)
 async def send_onboarding_form(
     business_id: int = Path(...),

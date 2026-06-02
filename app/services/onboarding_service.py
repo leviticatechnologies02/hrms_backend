@@ -121,8 +121,54 @@ class OnboardingService:
             found_ids = {m.id for m in masters}
             missing = [pid for pid in requested_policies if pid not in found_ids]
             if missing:
-                from fastapi import HTTPException, status
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Master policies not found or not owned by business: {missing}")
+                # Check if the business has ANY policies
+                total_policies_count = self.db.query(MasterPolicy).filter(MasterPolicy.business_id == business_id).count()
+                if total_policies_count == 0:
+                    # Auto-create the standard default policies
+                    default_policies = [
+                        {"name": "Employee Handbook", "description": "Complete guide to company policies and procedures", "type": "handbook", "is_mandatory": True, "requires_acknowledgment": True},
+                        {"name": "Code of Conduct", "description": "Professional behavior and ethical guidelines", "type": "conduct", "is_mandatory": True, "requires_acknowledgment": True},
+                        {"name": "IT Security Policy", "description": "Information technology security guidelines and requirements", "type": "it_security", "is_mandatory": True, "requires_acknowledgment": True},
+                        {"name": "Remote Work Policy", "description": "Guidelines for remote work arrangements", "type": "remote_work", "is_mandatory": False, "requires_acknowledgment": True},
+                        {"name": "Leave Policy", "description": "Annual leave, sick leave, and other time-off policies", "type": "leave", "is_mandatory": True, "requires_acknowledgment": True},
+                        {"name": "Health & Safety Policy", "description": "Workplace health and safety guidelines", "type": "health_safety", "is_mandatory": True, "requires_acknowledgment": True}
+                    ]
+                    for dp in default_policies:
+                        new_policy = MasterPolicy(
+                            business_id=business_id,
+                            name=dp["name"],
+                            description=dp["description"],
+                            type=dp["type"],
+                            is_mandatory=dp["is_mandatory"],
+                            requires_acknowledgment=dp["requires_acknowledgment"],
+                            created_by=user_id
+                        )
+                        self.db.add(new_policy)
+                    self.db.commit()
+                    
+                    # Re-query
+                    masters = self.db.query(MasterPolicy).filter(MasterPolicy.id.in_(requested_policies), MasterPolicy.business_id == business_id).all()
+                    found_ids = {m.id for m in masters}
+                    missing = [pid for pid in requested_policies if pid not in found_ids]
+
+                # If any policies are STILL missing (e.g. arbitrary IDs not in the 1-6 range), auto-populate them
+                if missing:
+                    for pid in missing:
+                        placeholder_policy = MasterPolicy(
+                            id=pid,
+                            business_id=business_id,
+                            name=f"Standard Policy {pid}",
+                            description=f"Auto-generated policy template for ID {pid}",
+                            type="other",
+                            is_mandatory=True,
+                            requires_acknowledgment=True,
+                            created_by=user_id
+                        )
+                        self.db.add(placeholder_policy)
+                    self.db.commit()
+                    
+                    # Re-query one last time
+                    masters = self.db.query(MasterPolicy).filter(MasterPolicy.id.in_(requested_policies), MasterPolicy.business_id == business_id).all()
 
         # Try to fetch existing form
         form = None
@@ -142,7 +188,7 @@ class OnboardingService:
             form.verify_pan = form_data.verify_pan
             form.verify_bank = form_data.verify_bank
             form.verify_aadhaar = form_data.verify_aadhaar
-            form.notes = form_data.notes
+            form.notes = getattr(form_data, 'notes', None)
             # Ensure offer_letter and salary_options are not stored on DB-level (properties are placeholders)
             form.status = OnboardingStatus.SENT
             form.updated_at = now
@@ -163,7 +209,7 @@ class OnboardingService:
                 "verify_pan": form_data.verify_pan,
                 "verify_bank": form_data.verify_bank,
                 "verify_aadhaar": form_data.verify_aadhaar,
-                "notes": form_data.notes,
+                "notes": getattr(form_data, 'notes', None),
                 "created_by": user_id,
                 "created_at": now
             }

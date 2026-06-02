@@ -1171,17 +1171,11 @@ async def attach_policies_to_form(
         if missing:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Master policies not found or not owned by business: {missing}")
 
-        # Remove existing onboarding policy records for this form (scoped)
-        if table_has_column(db, 'onboarding_policies', 'business_id'):
-            db.query(OnboardingPolicy).filter(OnboardingPolicy.form_id == form_id, OnboardingPolicy.business_id == business_id).delete()
-        else:
-            db.query(OnboardingPolicy).filter(OnboardingPolicy.form_id == form_id).delete()
+        # Remove existing onboarding policy records for this form (scoped by business)
+        db.query(OnboardingPolicy).filter(OnboardingPolicy.form_id == form_id, OnboardingPolicy.business_id == business_id).delete()
 
-        # Remove existing form-policy mappings for this form
-        if table_has_column(db, 'form_policy_mapping', 'business_id'):
-            db.query(FormPolicyMapping).filter(FormPolicyMapping.form_id == form_id, FormPolicyMapping.business_id == business_id).delete()
-        else:
-            db.query(FormPolicyMapping).filter(FormPolicyMapping.form_id == form_id).delete()
+        # Remove existing form-policy mappings for this form (scoped by business)
+        db.query(FormPolicyMapping).filter(FormPolicyMapping.form_id == form_id, FormPolicyMapping.business_id == business_id).delete()
 
         # Preserve order as sent by client
         attached_masters = []
@@ -1201,8 +1195,7 @@ async def attach_policies_to_form(
                 display_order=i,
                 created_by=current_user.id
             )
-            if table_has_column(db, 'onboarding_policies', 'business_id'):
-                policy_kwargs['business_id'] = business_id
+            policy_kwargs['business_id'] = business_id
             policy = OnboardingPolicy(**policy_kwargs)
             db.add(policy)
 
@@ -1243,10 +1236,7 @@ async def get_form_policies(
     validate_business_access(business_id, current_user, db)
     try:
         _ = validate_form_access(db, form_id, business_id, current_user)
-        if table_has_column(db, 'onboarding_policies', 'business_id'):
-            policies = db.query(OnboardingPolicy).filter(OnboardingPolicy.form_id == form_id, OnboardingPolicy.business_id == business_id).order_by(OnboardingPolicy.display_order).all()
-        else:
-            policies = db.query(OnboardingPolicy).filter(OnboardingPolicy.form_id == form_id).order_by(OnboardingPolicy.display_order).all()
+        policies = db.query(OnboardingPolicy).filter(OnboardingPolicy.form_id == form_id, OnboardingPolicy.business_id == business_id).order_by(OnboardingPolicy.display_order).all()
         return [
             {
                 "id": p.id,

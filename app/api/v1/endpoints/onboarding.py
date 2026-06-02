@@ -1835,7 +1835,20 @@ async def get_candidate_form_by_token(form_token: str, db: Session = Depends(get
         if submission:
             if submission.first_name:
                 current_step = 2
-        return {"form_id": form.id, "form_token": form.form_token, "candidate_name": form.candidate_name, "candidate_email": form.candidate_email, "candidate_mobile": form.candidate_mobile, "business_name": business_name, "business_id": form.business_id, "current_step": current_step, "total_steps": 11, "status": form.status.value, "has_submission": submission is not None}
+        return {
+            "form_id": form.id,
+            "form_token": form.form_token,
+            "candidate_name": form.candidate_name,
+            "candidate_email": form.candidate_email,
+            "candidate_mobile": form.candidate_mobile,
+            "business_name": business_name,
+            "business_id": form.business_id,
+            "current_step": current_step,
+            "total_steps": 11,
+            "status": form.status.value,
+            "has_submission": submission is not None,
+            "candidate_mobile_verified": bool(getattr(form, "candidate_mobile_verified", False)),
+        }
     except HTTPException:
         raise
     except Exception as e:

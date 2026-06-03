@@ -82,7 +82,7 @@ class Settings(BaseSettings):
     SMTP_USERNAME: str = os.getenv("SMTP_USERNAME", "nagendrareddy1017@gmail.com")
 
     # Gmail app passwords are often shown with spaces; normalize them here.
-    SMTP_PASSWORD: str = os.getenv("SMTP_PASSWORD")
+    SMTP_PASSWORD: Optional[str] = os.getenv("SMTP_PASSWORD")
 
     SMTP_FROM_EMAIL: str = os.getenv("SMTP_FROM_EMAIL", "nagendrareddy1017@gmail.com")
     SMTP_FROM_NAME: str = os.getenv("SMTP_FROM_NAME", "Levitica HRMS")
@@ -188,10 +188,11 @@ class Settings(BaseSettings):
     
     @field_validator('SMTP_PASSWORD')
     @classmethod
-    def validate_smtp_password(cls, value: str) -> str:
+    def validate_smtp_password(cls, value: Optional[str]) -> Optional[str]:
         if not value or not value.strip():
             import warnings
             warnings.warn("SMTP_PASSWORD is empty. Email functionality will not work.")
+            return None
         return value.replace(" ", "").strip()
     
     def is_smtp_configured(self) -> bool:

@@ -64,7 +64,7 @@ DOCUMENT_BUCKETS = (
     "aadhaar_card",
     "pan_card",
     "experience_letter",
-    "resume",
+    "higher_education_document",
     "payslips",
 )
 DOCUMENT_BUCKET_ALIASES = {
@@ -73,7 +73,8 @@ DOCUMENT_BUCKET_ALIASES = {
     "aadhaar_card": "aadhaar_card",
     "pan_card": "pan_card",
     "experience_letter": "experience_letter",
-    "resume": "resume",
+    "higher_education_document": "higher_education_document",
+    "resume": "higher_education_document",
     "payslip": "payslips",
     "payslips": "payslips",
 }

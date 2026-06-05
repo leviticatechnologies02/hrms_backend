@@ -1730,7 +1730,7 @@ async def review_onboarding_form(
         submission_data = {}
         if submission:
             for column in submission.__table__.columns:
-                if column.name in ["present_address", "permanent_address"]:
+                if column.name in ["present_address", "permanent_address", "mobile_verified"]:
                     continue
                 val = getattr(submission, column.name)
                 if isinstance(val, (datetime, date)):

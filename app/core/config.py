@@ -91,8 +91,11 @@ class Settings(BaseSettings):
     EMAIL_SEND_TIMEOUT: int = int(os.getenv("EMAIL_SEND_TIMEOUT", "30"))
     
     # SMS Configuration
-    SMS_PROVIDER: str = "twilio"  # Options: 'twilio', 'msg91', 'fast2sms'
-    
+    SMS_PROVIDER: str = os.getenv("SMS_PROVIDER", "2factor")  # Options: 'twilio', 'msg91', 'fast2sms', '2factor'
+
+    # 2Factor (https://2factor.in)
+    TWO_FACTOR_API_KEY: Optional[str] = os.getenv("TWO_FACTOR_API_KEY")
+
     # Twilio
     TWILIO_ACCOUNT_SID: Optional[str] = None
     TWILIO_AUTH_TOKEN: Optional[str] = os.getenv("TWILIO_AUTH_TOKEN")

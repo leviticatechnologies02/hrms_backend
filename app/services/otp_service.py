@@ -5,7 +5,7 @@ from app.core.redis_client import redis_client
 from redis.exceptions import DataError
 from app.utils.otp_utils import generate_otp, hash_otp, verify_otp_hash, get_expiry_timestamp, OTP_EXPIRY_SECONDS
 from fastapi import HTTPException
-from app.utils.messaging import send_sms_via_twilio, send_whatsapp_via_meta
+from app.utils.messaging import send_whatsapp_via_meta
 from app.core.config import settings
 from app.models.otp_verification import OTPVerification
 from app.core.database import get_db
@@ -140,8 +140,19 @@ def send_otp_background(business_id: int, mobile: str, channels: List[str], otp:
     sms_ok = False
     wa_ok = False
     if "sms" in channels:
-        sms_body = f"Levitica HRMS OTP: {otp}. Valid for 5 minutes."
-        sms_ok, _ = send_sms_via_twilio(f"+91{mobile}", sms_body)
+        from app.services.sms_service import sms_service
+        import asyncio
+        # run async send in background sync context
+        loop = asyncio.new_event_loop()
+        try:
+            sms_ok = loop.run_until_complete(
+                sms_service.send_otp(mobile, otp)
+            )
+        except Exception as sms_err:
+            logger.error(f"SMS send error: {sms_err}")
+            sms_ok = False
+        finally:
+            loop.close()
         if client:
             client.hset(key, "sms_sent", int(bool(sms_ok)))
 

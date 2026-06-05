@@ -942,16 +942,18 @@ async def generate_complete_offer_letter(
             letter_content = replace_template_variables(letter_content, template_variables)
 
         # Persist offer letter (scoped)
+        actual_template_id = template.id if template else None
+        
         existing_offer = db.query(OfferLetter).filter(OfferLetter.form_id == form_id, OfferLetter.business_id == business_id).first()
         if existing_offer:
-            existing_offer.template_id = offer_data.template_id
+            existing_offer.template_id = actual_template_id
             existing_offer.letter_content = letter_content
             existing_offer.updated_at = datetime.now()
             offer_letter = existing_offer
         else:
             offer_letter = OfferLetter(
                 form_id=form_id,
-                template_id=offer_data.template_id,
+                template_id=actual_template_id,
                 position_title=offer_data.position_title or "",
                 department=offer_data.department or "",
                 location=offer_data.location or "",
@@ -969,6 +971,38 @@ async def generate_complete_offer_letter(
             )
             db.add(offer_letter)
 
+        # Generate physical PDF file
+        try:
+            from app.services.pdf_professional_template import professional_pdf_service
+            from app.services.pdf_data_mapper import pdf_data_mapper
+            from app.services.file_upload_service import ensure_dir
+            import os
+            
+            candidate_data = pdf_data_mapper.map_onboarding_form_to_pdf_data(
+                form=form,
+                salary_data=salary_breakup,
+                offer_letter=offer_letter
+            )
+            
+            pdf_buffer = professional_pdf_service.generate_offer_letter_pdf(
+                candidate_data=candidate_data
+            )
+            
+            if pdf_buffer:
+                filename = professional_pdf_service.generate_filename(form.candidate_name or "Candidate", "Offer_Letter")
+                uploads_dir = os.getenv("UPLOAD_DIR", "uploads")
+                dest_folder = os.path.join(uploads_dir, "offer_letters")
+                ensure_dir(dest_folder)
+                
+                saved_path = os.path.join(dest_folder, filename).replace('\\', '/')
+                with open(saved_path, "wb") as f:
+                    f.write(pdf_buffer.read())
+                
+                offer_letter.generated_file_path = saved_path
+        except Exception as pdf_err:
+            import logging
+            logging.error(f"Failed to generate physical PDF for offer letter: {pdf_err}")
+
         db.commit()
         db.refresh(offer_letter)
 
@@ -978,7 +1012,8 @@ async def generate_complete_offer_letter(
             "form_id": form_id,
             "salary_breakup": salary_breakup,
             "template_name": template.name if template else "Default",
-            "generated_at": offer_letter.created_at.isoformat() if offer_letter.created_at else None
+            "generated_at": offer_letter.created_at.isoformat() if offer_letter.created_at else None,
+            "file_path": offer_letter.generated_file_path
         }
     except HTTPException:
         raise
@@ -1611,12 +1646,53 @@ async def review_onboarding_form(
             "rejection_reason": form.rejection_reason,
         }
 
+        # Also fetch attached policies for this form
+        from app.models.master_policy import FormPolicyMapping, MasterPolicy
+        policy_mappings = (
+            db.query(FormPolicyMapping)
+            .filter(FormPolicyMapping.form_id == form_id)
+            .all()
+        )
+        attached_policies = []
+        for pm in policy_mappings:
+            policy = db.query(MasterPolicy).filter(MasterPolicy.id == pm.policy_id).first()
+            if policy:
+                attached_policies.append({
+                    "id": policy.id,
+                    "name": policy.name,
+                    "description": policy.description or "",
+                    "type": policy.type or "other",
+                    "is_mandatory": bool(policy.is_mandatory),
+                })
+
+        # Fetch offer letter if attached
+        from app.models.onboarding import OfferLetter
+        offer_letter = db.query(OfferLetter).filter(OfferLetter.form_id == form_id).first()
+        offer_letter_data = None
+        if offer_letter:
+            offer_letter_data = {
+                "id": offer_letter.id,
+                "position_title": offer_letter.position_title,
+                "department": offer_letter.department,
+                "location": offer_letter.location,
+                "basic_salary": offer_letter.basic_salary,
+                "gross_salary": offer_letter.gross_salary,
+                "ctc": offer_letter.ctc,
+                "joining_date": offer_letter.joining_date.isoformat() if offer_letter.joining_date else None,
+                "offer_valid_until": offer_letter.offer_valid_until.isoformat() if offer_letter.offer_valid_until else None,
+                "letter_content": offer_letter.letter_content,
+                "is_generated": offer_letter.is_generated,
+                "is_sent": offer_letter.is_sent
+            }
+
         if not submission:
             return {
                 "success": True,
                 "form": form_overview,
                 "has_submission": False,
                 "submission": None,
+                "attached_policies": attached_policies,
+                "offer_letter": offer_letter_data,
             }
 
         # Parse JSON fields safely
@@ -1696,24 +1772,7 @@ async def review_onboarding_form(
             "user_agent": submission.user_agent,
         }
 
-        # Also fetch attached policies for this form
-        from app.models.master_policy import FormPolicyMapping, MasterPolicy
-        policy_mappings = (
-            db.query(FormPolicyMapping)
-            .filter(FormPolicyMapping.form_id == form_id)
-            .all()
-        )
-        attached_policies = []
-        for pm in policy_mappings:
-            policy = db.query(MasterPolicy).filter(MasterPolicy.id == pm.policy_id).first()
-            if policy:
-                attached_policies.append({
-                    "id": policy.id,
-                    "name": policy.name,
-                    "description": policy.description or "",
-                    "type": policy.type or "other",
-                    "is_mandatory": bool(policy.is_mandatory),
-                })
+
 
         return {
             "success": True,
@@ -1721,6 +1780,7 @@ async def review_onboarding_form(
             "has_submission": True,
             "submission": submission_data,
             "attached_policies": attached_policies,
+            "offer_letter": offer_letter_data,
         }
     except HTTPException:
         raise

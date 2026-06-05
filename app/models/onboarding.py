@@ -287,27 +287,59 @@ class FormSubmission(Base):
     blood_group = Column(String(10))
     nationality = Column(String(100))
     
-    # Contact Information (existing fields)
+    # Contact Information
     personal_email = Column(String(255))
+    mobile = Column(String(20))
     alternate_mobile = Column(String(20))
+    home_phone = Column(String(20))
     
-    # Address Information (existing fields)
-    present_address = Column(Text)
-    permanent_address = Column(Text)
+    # Family Details
+    father_name = Column(String(255))
+    father_phone = Column(String(20))
+    father_dob = Column(Date)
+    mother_name = Column(String(255))
+    mother_phone = Column(String(20))
+    mother_dob = Column(Date)
     
-    # Statutory Information (existing fields)
+    # Statutory Information
     pan_number = Column(String(20))
     aadhaar_number = Column(String(20))
+    passport_number = Column(String(50))
+    driving_license_number = Column(String(50))
+    uan_number = Column(String(50))
+    esi_number = Column(String(50))
     
-    # Bank Information (existing fields)
+    # Address Information
+    present_address = Column(Text)
+    present_address_line1 = Column(String(255))
+    present_address_line2 = Column(String(255))
+    present_city = Column(String(100))
+    present_pincode = Column(String(20))
+    present_state = Column(String(100))
+    present_country = Column(String(100))
+    
+    permanent_address = Column(Text)
+    permanent_address_line1 = Column(String(255))
+    permanent_address_line2 = Column(String(255))
+    permanent_city = Column(String(100))
+    permanent_pincode = Column(String(20))
+    permanent_state = Column(String(100))
+    permanent_country = Column(String(100))
+    
+    # Bank Information
     bank_name = Column(String(255))
     account_number = Column(String(50))
     ifsc_code = Column(String(20))
+    account_holder_name = Column(String(255))
     
-    # Emergency Contact (existing fields)
+    # Emergency Contact
+    emergency_contact = Column(String(20))
     emergency_contact_name = Column(String(255))
     emergency_contact_relationship = Column(String(100))
     emergency_contact_mobile = Column(String(20))
+    
+    # Other Information
+    mobile_verified = Column(Boolean, default=False)
     
     # Education & Experience (existing fields)
     education_details = Column(Text)  # JSON

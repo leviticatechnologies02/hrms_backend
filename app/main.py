@@ -68,6 +68,48 @@ async def lifespan(app: FastAPI):
         except Exception as mig_err:
             logger.warning(f"Auto-migration skipped or failed: {mig_err}")
             
+        # Auto-migrate: Add missing columns to form_submissions table if they don't exist
+        try:
+            from sqlalchemy import text
+            columns_to_add = {
+                "mobile": "VARCHAR(20)",
+                "home_phone": "VARCHAR(20)",
+                "father_name": "VARCHAR(255)",
+                "father_phone": "VARCHAR(20)",
+                "father_dob": "DATE",
+                "mother_name": "VARCHAR(255)",
+                "mother_phone": "VARCHAR(20)",
+                "mother_dob": "DATE",
+                "passport_number": "VARCHAR(50)",
+                "driving_license_number": "VARCHAR(50)",
+                "uan_number": "VARCHAR(50)",
+                "esi_number": "VARCHAR(50)",
+                "present_address_line1": "VARCHAR(255)",
+                "present_address_line2": "VARCHAR(255)",
+                "present_city": "VARCHAR(100)",
+                "present_pincode": "VARCHAR(20)",
+                "present_state": "VARCHAR(100)",
+                "present_country": "VARCHAR(100)",
+                "permanent_address_line1": "VARCHAR(255)",
+                "permanent_address_line2": "VARCHAR(255)",
+                "permanent_city": "VARCHAR(100)",
+                "permanent_pincode": "VARCHAR(20)",
+                "permanent_state": "VARCHAR(100)",
+                "permanent_country": "VARCHAR(100)",
+                "account_holder_name": "VARCHAR(255)",
+                "emergency_contact": "VARCHAR(20)",
+                "mobile_verified": "BOOLEAN DEFAULT FALSE",
+            }
+            with engine.begin() as conn:
+                for col_name, col_type in columns_to_add.items():
+                    try:
+                        conn.execute(text(f"ALTER TABLE form_submissions ADD COLUMN IF NOT EXISTS {col_name} {col_type};"))
+                    except Exception as col_err:
+                        logger.warning(f"Failed to add column {col_name} to form_submissions: {col_err}")
+            logger.info("✓ Auto-migration: Ensured form_submissions columns exist")
+        except Exception as mig_err:
+            logger.warning(f"form_submissions Auto-migration skipped or failed: {mig_err}")
+            
     except Exception as e:
         logger.error(f"Error creating tables: {e}")
 

@@ -630,7 +630,7 @@ class ProfessionalPDFService:
         """Build salary annexure page"""
         content = []
         
-        salary_breakdown = data.get('salary_breakdown', {})
+        salary_breakdown = data.get('salary_breakdown') or {}
         joining_date = data.get('joining_date', 'Date')
         candidate_name = data.get('candidate_name', 'Employee Name')
         

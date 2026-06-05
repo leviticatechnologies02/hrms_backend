@@ -109,32 +109,16 @@ def _build_form_submission_payload(submission_data: FormSubmissionCreate) -> dic
         payload["emergency_contact_mobile"] = payload["emergency_contact"]
 
     allowed_fields = {
-        "first_name",
-        "middle_name",
-        "last_name",
-        "gender",
-        "date_of_birth",
-        "marital_status",
-        "blood_group",
-        "nationality",
-        "personal_email",
-        "alternate_mobile",
-        "present_address",
-        "permanent_address",
-        "pan_number",
-        "aadhaar_number",
-        "bank_name",
-        "account_number",
-        "ifsc_code",
-        "emergency_contact_name",
-        "emergency_contact_relationship",
-        "emergency_contact_mobile",
-        "education_details",
-        "experience_details",
-        "uploaded_documents",
-        "policy_acknowledgments",
-        "ip_address",
-        "user_agent",
+        "first_name", "middle_name", "last_name", "gender", "date_of_birth", "marital_status",
+        "blood_group", "nationality", "personal_email", "mobile", "alternate_mobile", "home_phone",
+        "father_name", "father_phone", "father_dob", "mother_name", "mother_phone", "mother_dob",
+        "present_address", "present_address_line1", "present_address_line2", "present_city", "present_pincode", "present_state", "present_country",
+        "permanent_address", "permanent_address_line1", "permanent_address_line2", "permanent_city", "permanent_pincode", "permanent_state", "permanent_country",
+        "pan_number", "aadhaar_number", "passport_number", "driving_license_number", "uan_number", "esi_number",
+        "bank_name", "account_number", "ifsc_code", "account_holder_name",
+        "emergency_contact", "emergency_contact_name", "emergency_contact_relationship", "emergency_contact_mobile",
+        "mobile_verified", "education_details", "experience_details", "uploaded_documents", "policy_acknowledgments",
+        "ip_address", "user_agent",
     }
 
     return {key: value for key, value in payload.items() if key in allowed_fields}
@@ -148,6 +132,50 @@ def _build_form_submission_response(submission_data: FormSubmissionCreate, submi
         "submitted_at": submission.submitted_at,
     })
     return response_payload
+
+
+@router.get("/migrate-schema")
+async def migrate_schema(db: Session = Depends(get_db)):
+    columns_to_add = {
+        "mobile": "VARCHAR(20)",
+        "home_phone": "VARCHAR(20)",
+        "father_name": "VARCHAR(255)",
+        "father_phone": "VARCHAR(20)",
+        "father_dob": "DATE",
+        "mother_name": "VARCHAR(255)",
+        "mother_phone": "VARCHAR(20)",
+        "mother_dob": "DATE",
+        "passport_number": "VARCHAR(50)",
+        "driving_license_number": "VARCHAR(50)",
+        "uan_number": "VARCHAR(50)",
+        "esi_number": "VARCHAR(50)",
+        "present_address_line1": "VARCHAR(255)",
+        "present_address_line2": "VARCHAR(255)",
+        "present_city": "VARCHAR(100)",
+        "present_pincode": "VARCHAR(20)",
+        "present_state": "VARCHAR(100)",
+        "present_country": "VARCHAR(100)",
+        "permanent_address_line1": "VARCHAR(255)",
+        "permanent_address_line2": "VARCHAR(255)",
+        "permanent_city": "VARCHAR(100)",
+        "permanent_pincode": "VARCHAR(20)",
+        "permanent_state": "VARCHAR(100)",
+        "permanent_country": "VARCHAR(100)",
+        "account_holder_name": "VARCHAR(255)",
+        "emergency_contact": "VARCHAR(20)",
+        "mobile_verified": "BOOLEAN DEFAULT FALSE",
+    }
+    from sqlalchemy import text
+    results = []
+    for col_name, col_type in columns_to_add.items():
+        try:
+            db.execute(text(f"ALTER TABLE form_submissions ADD COLUMN {col_name} {col_type};"))
+            db.commit()
+            results.append(f"Added {col_name}")
+        except Exception as e:
+            db.rollback()
+            results.append(f"Skipped {col_name} ({e})")
+    return {"results": results}
 
 
 def _build_candidate_documents_response(db: Session, business_id: int, form_token: str):
@@ -170,25 +198,7 @@ def _build_candidate_documents_response(db: Session, business_id: int, form_toke
             documents[bucket].append(record.file_path)
 
     return documents
-from fastapi import (
-    APIRouter,
-    UploadFile,
-    File,
-    HTTPException,
-    Query,
-    Path,
-    Depends,
-    status,
-)
-from sqlalchemy.orm import Session
-from typing import List
 import base64
-
-# your imports
-# from app.db.session import get_db
-# from app.models.onboarding import OnboardingForm, CandidateDocument
-
-router = APIRouter(tags=["Onboarding"])
 
 
 @router.post("/documents")
@@ -948,7 +958,16 @@ async def generate_complete_offer_letter(
         existing_offer = db.query(OfferLetter).filter(OfferLetter.form_id == form_id, OfferLetter.business_id == business_id).first()
         if existing_offer:
             existing_offer.template_id = actual_template_id
+            existing_offer.position_title = offer_data.position_title or ""
+            existing_offer.department = offer_data.department or ""
+            existing_offer.location = offer_data.location or ""
+            existing_offer.basic_salary = str(salary_breakup['earnings'].get('Basic Salary', 0)) if salary_breakup else (offer_data.basic_salary or "")
+            existing_offer.gross_salary = str(offer_data.gross_salary or 0)
+            existing_offer.ctc = str(salary_breakup['ctc']) if salary_breakup else (offer_data.ctc or "")
+            existing_offer.joining_date = offer_data.joining_date
+            existing_offer.offer_valid_until = offer_data.offer_valid_until
             existing_offer.letter_content = letter_content
+            existing_offer.is_generated = True
             existing_offer.updated_at = datetime.now()
             offer_letter = existing_offer
         else:
@@ -1707,71 +1726,22 @@ async def review_onboarding_form(
             except (json.JSONDecodeError, TypeError):
                 return value
 
-        # Build structured submission data grouped by steps
-        submission_data = {
-            "id": submission.id,
-            "submitted_at": submission.submitted_at.isoformat() if submission.submitted_at else None,
-
-            # Step 2: Basic Details
-            "basic_details": {
-                "first_name": submission.first_name,
-                "middle_name": submission.middle_name,
-                "last_name": submission.last_name,
-                "gender": submission.gender,
-                "date_of_birth": submission.date_of_birth.isoformat() if submission.date_of_birth else None,
-            },
-
-            # Step 3: Contact Details
-            "contact_details": {
-                "personal_email": submission.personal_email,
-                "alternate_mobile": submission.alternate_mobile,
-            },
-
-            # Step 4: Personal Details
-            "personal_details": {
-                "blood_group": submission.blood_group,
-                "nationality": submission.nationality,
-                "marital_status": submission.marital_status,
-            },
-
-            # Step 5: Statutory Details
-            "statutory_details": {
-                "pan_number": submission.pan_number,
-                "aadhaar_number": submission.aadhaar_number,
-            },
-
-            # Step 6: Emergency Contact
-            "emergency_contact": {
-                "name": submission.emergency_contact_name,
-                "relationship": submission.emergency_contact_relationship,
-                "mobile": submission.emergency_contact_mobile,
-            },
-
-            # Step 7 & 8: Address Details
-            "present_address": submission.present_address,
-            "permanent_address": submission.permanent_address,
-
-            # Step 9: Bank Details
-            "bank_details": {
-                "bank_name": submission.bank_name,
-                "account_number": submission.account_number,
-                "ifsc_code": submission.ifsc_code,
-            },
-
-            # Step 10: Education & Experience
-            "education_details": _safe_json_parse(submission.education_details),
-            "experience_details": _safe_json_parse(submission.experience_details),
-
-            # Documents
-            "uploaded_documents": _safe_json_parse(submission.uploaded_documents),
-
-            # Policy Acknowledgments
-            "policy_acknowledgments": _safe_json_parse(submission.policy_acknowledgments),
-
-            # System info
-            "ip_address": submission.ip_address,
-            "user_agent": submission.user_agent,
-        }
+        # Build structured submission data matching the flat structure of the submission model
+        submission_data = {}
+        if submission:
+            for column in submission.__table__.columns:
+                if column.name in ["present_address", "permanent_address"]:
+                    continue
+                val = getattr(submission, column.name)
+                if isinstance(val, (datetime, date)):
+                    submission_data[column.name] = val.isoformat()
+                elif column.name in ["education_details", "experience_details", "uploaded_documents", "policy_acknowledgments"]:
+                    # the frontend probably expects parsed JSON dicts here to avoid double parsing, 
+                    # but if it needs strings, it will get the DB strings.
+                    # We will attempt to parse them to be helpful, or keep them as strings.
+                    submission_data[column.name] = _safe_json_parse(val)
+                else:
+                    submission_data[column.name] = val
 
 
 

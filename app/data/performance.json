@@ -1,10 +1,6 @@
 {
   "cpu_usage_history": [
     {
-      "timestamp": "2026-06-05T13:33:19.643664",
-      "value": 20.7
-    },
-    {
       "timestamp": "2026-06-05T13:33:50.738709",
       "value": 24.1
     },
@@ -399,13 +395,13 @@
     {
       "timestamp": "2026-06-05T14:24:41.618136",
       "value": 22.1
+    },
+    {
+      "timestamp": "2026-06-05T14:25:12.706142",
+      "value": 22.7
     }
   ],
   "memory_usage_history": [
-    {
-      "timestamp": "2026-06-05T13:33:19.643664",
-      "value": 89.5
-    },
     {
       "timestamp": "2026-06-05T13:33:50.738709",
       "value": 89.4
@@ -801,6 +797,10 @@
     {
       "timestamp": "2026-06-05T14:24:41.618136",
       "value": 88.1
+    },
+    {
+      "timestamp": "2026-06-05T14:25:12.706142",
+      "value": 90.5
     }
   ],
   "response_times": [
@@ -1912,6 +1912,6 @@
     "memory_peak": 99.1,
     "slowest_response": 14727.190971374512
   },
-  "health_score": 99.703,
-  "last_updated": "2026-06-05T14:24:41.618136"
+  "health_score": 99.505,
+  "last_updated": "2026-06-05T14:25:12.706142"
 }

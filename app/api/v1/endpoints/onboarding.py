@@ -1771,7 +1771,7 @@ async def review_onboarding_form(
 async def approve_onboarding_form(
     business_id: int = Path(...),
     form_id: int = Path(...),
-    approve_data: ApproveOnboardingRequest = Body(default=None),
+    approve_data: Optional[ApproveOnboardingRequest] = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -1906,6 +1906,30 @@ async def approve_onboarding_form(
         }
     except HTTPException:
         raise
+    except IntegrityError as e:
+        db.rollback()
+        error_msg = str(e.orig)
+        detail = "Invalid data provided."
+        if "foreign key constraint" in error_msg.lower():
+            if "shift_policy" in error_msg:
+                detail = "Invalid Shift selected. The selected shift does not exist."
+            elif "department" in error_msg:
+                detail = "Invalid Department selected."
+            elif "designation" in error_msg:
+                detail = "Invalid Designation selected."
+            elif "location" in error_msg:
+                detail = "Invalid Location selected."
+            elif "cost_center" in error_msg:
+                detail = "Invalid Cost Center selected."
+            elif "grade" in error_msg:
+                detail = "Invalid Grade selected."
+            elif "weekoff_policy" in error_msg:
+                detail = "Invalid Week-off Policy selected."
+            elif "reporting_manager" in error_msg:
+                detail = "Invalid Reporting Manager selected."
+            else:
+                detail = "One of the selected options is invalid and does not exist in the database."
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))

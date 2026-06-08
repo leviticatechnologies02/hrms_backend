@@ -1806,6 +1806,7 @@ async def approve_onboarding_form(
             employee_updates = {
                 "date_of_joining": approve_data.joining_date,
                 "date_of_confirmation": approve_data.confirmation_date,
+                "business_unit_id": int(approve_data.business_unit) if approve_data.business_unit and str(approve_data.business_unit).isdigit() else None,
                 "location_id": int(approve_data.location) if approve_data.location and str(approve_data.location).isdigit() else None,
                 "cost_center_id": int(approve_data.cost_center) if approve_data.cost_center and str(approve_data.cost_center).isdigit() else None,
                 "department_id": int(approve_data.department) if approve_data.department and str(approve_data.department).isdigit() else None,
@@ -1837,6 +1838,7 @@ async def approve_onboarding_form(
                 "employee_id": existing_employee.id,
                 "joining_date": existing_employee.date_of_joining,
                 "confirmation_date": existing_employee.date_of_confirmation,
+                "business_unit": existing_employee.business_unit_id,
                 "location": existing_employee.location_id,
                 "cost_center": existing_employee.cost_center_id,
                 "department": existing_employee.department_id,
@@ -1892,6 +1894,7 @@ async def approve_onboarding_form(
             "employee_id": new_employee.id,
             "joining_date": new_employee.date_of_joining,
             "confirmation_date": new_employee.date_of_confirmation,
+            "business_unit": new_employee.business_unit_id,
             "location": new_employee.location_id,
             "cost_center": new_employee.cost_center_id,
             "department": new_employee.department_id,

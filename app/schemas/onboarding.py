@@ -46,6 +46,7 @@ class ApproveOnboardingRequest(BaseModel):
     employee_id: Optional[int] = None
     joining_date: Optional[date] = None
     confirmation_date: Optional[date] = None
+    business_unit: Optional[str] = None
     location: Optional[str] = None
     cost_center: Optional[str] = None
     department: Optional[str] = None

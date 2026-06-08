@@ -8,7 +8,7 @@ Onboarding API Endpoints - Multi-tenant (business_id) refactor
 """
 
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Path, Body, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Path, Body, UploadFile, File, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, desc, inspect as sa_inspect
 from sqlalchemy.exc import IntegrityError
@@ -203,6 +203,7 @@ import base64
 
 @router.post("/documents")
 async def upload_onboarding_documents(
+    request: Request,
     business_id: int = Path(..., description="Business ID"),
     form_token: str = Query(..., description="Onboarding form token"),
     document_name: str = Query(..., description="Document name"),
@@ -278,11 +279,18 @@ async def upload_onboarding_documents(
             with open(stored_file_path, "wb") as buffer:
                 buffer.write(file_contents)
 
+            # Format as absolute URL
+            base_url = str(request.base_url)
+            if not base_url.endswith("/"):
+                base_url += "/"
+            relative_path = stored_file_path_str.lstrip("/")
+            full_url = f"{base_url}{relative_path}"
+
             # response list
             uploaded_files.append(
                 {
                     "file_name": stored_filename,
-                    "file_path": stored_file_path_str,
+                    "file_path": full_url,
                 }
             )
 
@@ -292,7 +300,7 @@ async def upload_onboarding_documents(
                 form_token=form_token,
                 document_name=document_name,
                 document_type=bucket,
-                file_path=stored_file_path_str,
+                file_path=full_url,
             )
 
             db.add(record)

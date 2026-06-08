@@ -1769,12 +1769,15 @@ async def review_onboarding_form(
 
 @router.post("/{form_id}/approve", response_model=Dict[str, Any])
 async def approve_onboarding_form(
+    request: Request,
     business_id: int = Path(...),
     form_id: int = Path(...),
     approve_data: Optional[ApproveOnboardingRequest] = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
+    print("DEBUG RAW PAYLOAD: ", await request.body())
+    print("DEBUG PARSED PAYLOAD: ", approve_data)
     validate_business_access(business_id, current_user, db)
     try:
         from app.models.employee import Employee

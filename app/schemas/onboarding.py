@@ -58,6 +58,10 @@ class ApproveOnboardingRequest(BaseModel):
     employment_type: Optional[str] = None
     work_mode: Optional[str] = None
 
+    class Config:
+        populate_by_name = True
+        alias_generator = lambda s: ''.join(word.title() if i else word for i, word in enumerate(s.split('_')))
+
 
 # Base schemas
 class OnboardingFormBase(BaseModel):

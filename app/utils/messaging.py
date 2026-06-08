@@ -36,21 +36,30 @@ def send_whatsapp_via_meta(phone_number: str, message: str) -> Tuple[bool, str]:
         logger.warning("WhatsApp not configured (WHATSAPP_TOKEN / WHATSAPP_PHONE_NUMBER_ID missing); message not sent")
         return False, "whatsapp_not_configured"
 
-    url = f"https://graph.facebook.com/v16.0/{phone_number_id}/messages"
+    # Normalize phone number: strip non-digits, add 91 for Indian numbers
+    digits = "".join(filter(str.isdigit, phone_number))
+    if len(digits) == 10:
+        digits = "91" + digits  # Add India country code
+    elif digits.startswith("0"):
+        digits = "91" + digits[1:]  # Replace leading 0 with 91
+
+    url = f"https://graph.facebook.com/v18.0/{phone_number_id}/messages"
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     payload = {
         "messaging_product": "whatsapp",
-        "to": phone_number,
+        "to": digits,
         "type": "text",
         "text": {"body": message}
     }
 
     try:
         resp = httpx.post(url, json=payload, headers=headers, timeout=10)
+        logger.info(f"WhatsApp API response [{resp.status_code}]: {resp.text}")
         resp.raise_for_status()
         data = resp.json()
-        logger.info(f"WhatsApp message queued: {data}")
-        return True, data.get("messages", [{}])[0].get("id", "sent")
+        msg_id = data.get("messages", [{}])[0].get("id", "sent")
+        logger.info(f"WhatsApp message sent to {digits}: {msg_id}")
+        return True, msg_id
     except Exception as e:
-        logger.error(f"WhatsApp send failed: {e}")
+        logger.error(f"WhatsApp send failed to {digits}: {e}")
         return False, str(e)

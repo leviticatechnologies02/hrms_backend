@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query, Path, Body
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, desc, inspect as sa_inspect
 from sqlalchemy.exc import IntegrityError
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta, date
 import json
 import logging
@@ -37,7 +37,7 @@ from app.schemas.onboarding import (
     OnboardingSettingsUpdate, OnboardingSettingsResponse,
     BulkOnboardingCreate, BulkOnboardingResponse,
     FormSubmissionCreate, FormSubmissionResponse,
-    OnboardingRejectionRequest, TemplateGenerationRequest, TemplateGenerationResponse
+    OnboardingRejectionRequest, ApproveOnboardingRequest, TemplateGenerationRequest, TemplateGenerationResponse
     , DebugEnvironmentResponse
 )
 from app.schemas.employee import EmployeeCreate, OnboardingEmployeeCreate
@@ -1759,42 +1759,88 @@ async def review_onboarding_form(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-@router.post("/{form_id}/approve", response_model=OnboardingResponseSchema)
+@router.post("/{form_id}/approve", response_model=Dict[str, Any])
 async def approve_onboarding_form(
     business_id: int = Path(...),
     form_id: int = Path(...),
+    approve_data: ApproveOnboardingRequest = Body(default=None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
     validate_business_access(business_id, current_user, db)
     try:
-        # Keep approval workflow intact but ensure business scoping for employees creation
         from app.models.employee import Employee
         form = validate_form_access(db, form_id, business_id, current_user)
         if form.status == OnboardingStatus.APPROVED:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Form is already approved")
 
-        submissions = db.query(FormSubmission).filter(FormSubmission.form_id == form_id).all()
-        # Extract employee_data (existing logic preserved)
-        employee_data = {"first_name": None, "email": form.candidate_email, "mobile": form.candidate_mobile}
-        for submission in submissions:
-            step_data = submission.step_data or {}
-            if submission.step_number == 2:
-                employee_data['first_name'] = step_data.get('first_name')
+        submission = db.query(FormSubmission).filter(FormSubmission.form_id == form_id).first()
+        # Extract employee_data
+        employee_data = {
+            "first_name": submission.first_name if submission and submission.first_name else None,
+            "email": form.candidate_email, 
+            "mobile": form.candidate_mobile
+        }
+        
+        # Fallback to parsing candidate_name from form if first_name wasn't in submission
+        if not employee_data['first_name'] and form.candidate_name:
+            employee_data['first_name'] = form.candidate_name.split()[0]
+            
         if not employee_data['first_name']:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot create employee: First name is missing from form data")
         if not employee_data['email']:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot create employee: Email is missing from form data")
 
         existing_employee = db.query(Employee).filter(Employee.email == employee_data['email'], Employee.business_id == business_id).first()
+        
+        # Apply payload data if available
+        if approve_data:
+            employee_updates = {
+                "date_of_joining": approve_data.joining_date,
+                "date_of_confirmation": approve_data.confirmation_date,
+                "location_id": int(approve_data.location) if approve_data.location and str(approve_data.location).isdigit() else None,
+                "cost_center_id": int(approve_data.cost_center) if approve_data.cost_center and str(approve_data.cost_center).isdigit() else None,
+                "department_id": int(approve_data.department) if approve_data.department and str(approve_data.department).isdigit() else None,
+                "designation_id": int(approve_data.designation) if approve_data.designation and str(approve_data.designation).isdigit() else None,
+                "reporting_manager_id": int(approve_data.reporting_manager) if approve_data.reporting_manager and str(approve_data.reporting_manager).isdigit() else None,
+                "shift_policy_id": int(approve_data.shift) if approve_data.shift and str(approve_data.shift).isdigit() else None,
+                "grade_id": int(approve_data.grade) if approve_data.grade and str(approve_data.grade).isdigit() else None,
+                "weekoff_policy_id": int(approve_data.week_off) if approve_data.week_off and str(approve_data.week_off).isdigit() else None,
+                "employment_type": approve_data.employment_type,
+                "work_mode": approve_data.work_mode,
+            }
+            # Remove None values so we don't overwrite with nulls unnecessarily
+            employee_updates = {k: v for k, v in employee_updates.items() if v is not None}
+        else:
+            employee_updates = {}
+
         if existing_employee:
+            for key, value in employee_updates.items():
+                setattr(existing_employee, key, value)
+            
             form.employee_id = existing_employee.id
             form.status = OnboardingStatus.APPROVED
             form.approved_by = current_user.id
             form.approved_at = datetime.now()
             db.commit()
             db.refresh(form)
-            return form
+            return {
+                "form_id": form.id,
+                "employee_id": existing_employee.id,
+                "joining_date": existing_employee.date_of_joining,
+                "confirmation_date": existing_employee.date_of_confirmation,
+                "location": existing_employee.location_id,
+                "cost_center": existing_employee.cost_center_id,
+                "department": existing_employee.department_id,
+                "designation": existing_employee.designation_id,
+                "reporting_manager": existing_employee.reporting_manager_id,
+                "shift": existing_employee.shift_policy_id,
+                "grade": existing_employee.grade_id,
+                "week_off": existing_employee.weekoff_policy_id,
+                "employment_type": existing_employee.employment_type,
+                "work_mode": existing_employee.work_mode,
+                "status": form.status
+            }
 
         # Create employee (scoped)
         max_employee = db.query(Employee).order_by(Employee.id.desc()).first()
@@ -1821,6 +1867,9 @@ async def approve_onboarding_form(
             created_by=current_user.id,
             is_active=True
         )
+        for key, value in employee_updates.items():
+            setattr(new_employee, key, value)
+            
         db.add(new_employee)
         db.flush()
         form.status = OnboardingStatus.APPROVED
@@ -1830,7 +1879,23 @@ async def approve_onboarding_form(
         db.commit()
         db.refresh(form)
         db.refresh(new_employee)
-        return form
+        return {
+            "form_id": form.id,
+            "employee_id": new_employee.id,
+            "joining_date": new_employee.date_of_joining,
+            "confirmation_date": new_employee.date_of_confirmation,
+            "location": new_employee.location_id,
+            "cost_center": new_employee.cost_center_id,
+            "department": new_employee.department_id,
+            "designation": new_employee.designation_id,
+            "reporting_manager": new_employee.reporting_manager_id,
+            "shift": new_employee.shift_policy_id,
+            "grade": new_employee.grade_id,
+            "week_off": new_employee.weekoff_policy_id,
+            "employment_type": new_employee.employment_type,
+            "work_mode": new_employee.work_mode,
+            "status": form.status
+        }
     except HTTPException:
         raise
     except Exception as e:

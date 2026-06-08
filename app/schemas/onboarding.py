@@ -41,6 +41,23 @@ class SalaryOptionsSchema(BaseModel):
     special_allowance: float
 
 
+class ApproveOnboardingRequest(BaseModel):
+    form_id: int
+    employee_id: Optional[int] = None
+    joining_date: Optional[date] = None
+    confirmation_date: Optional[date] = None
+    location: Optional[str] = None
+    cost_center: Optional[str] = None
+    department: Optional[str] = None
+    designation: Optional[str] = None
+    reporting_manager: Optional[str] = None
+    shift: Optional[str] = None
+    grade: Optional[str] = None
+    week_off: Optional[str] = None
+    employment_type: Optional[str] = None
+    work_mode: Optional[str] = None
+
+
 # Base schemas
 class OnboardingFormBase(BaseModel):
     candidate_name: str = Field(..., min_length=2, max_length=255)

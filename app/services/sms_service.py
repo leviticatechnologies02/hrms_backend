@@ -18,7 +18,7 @@ class SMSService:
 
     async def send_otp(self, phone_number: str, otp: str) -> bool:
         """
-        Send OTP to phone number.
+        Send OTP to phone number (async version).
 
         Args:
             phone_number: Phone number with or without country code (e.g., +919876543210 or 9876543210)
@@ -44,26 +44,47 @@ class SMSService:
             logger.error(f"Failed to send SMS OTP: {e}")
             return False
 
+    def send_otp_sync(self, phone_number: str, otp: str) -> bool:
+        """
+        Send OTP to phone number (SYNCHRONOUS version).
+        Use this from sync background tasks to avoid event loop conflicts.
+
+        Args:
+            phone_number: Phone number with or without country code
+            otp: 6-digit OTP code
+
+        Returns:
+            bool: True if sent successfully, False otherwise
+        """
+        try:
+            logger.info(f"[SMS-SYNC] Sending OTP via provider '{self.provider}' to {phone_number}")
+            if self.provider == "2factor":
+                return self._send_via_2factor_sync(phone_number, otp)
+            elif self.provider == "twilio":
+                return self._send_via_twilio_sync(phone_number, otp)
+            elif self.provider == "fast2sms":
+                return self._send_via_fast2sms_sync(phone_number, otp)
+            else:
+                logger.error(f"[SMS-SYNC] Unknown or unsupported SMS provider for sync: {self.provider}")
+                return False
+
+        except Exception as e:
+            logger.error(f"[SMS-SYNC] Failed to send SMS OTP: {e}", exc_info=True)
+            return False
+
     # ------------------------------------------------------------------
     # 2Factor (https://2factor.in)  — OTP SMS API
     # API: GET https://2factor.in/API/V1/{api_key}/SMS/{phone}/{otp}
     # ------------------------------------------------------------------
     async def _send_via_2factor(self, phone_number: str, otp: str) -> bool:
-        """Send SMS OTP via 2Factor.in"""
+        """Send SMS OTP via 2Factor.in (async)"""
         try:
             api_key = settings.TWO_FACTOR_API_KEY
             if not api_key:
                 logger.error("2Factor API key not configured (TWO_FACTOR_API_KEY missing)")
                 return False
 
-            # Normalise phone — strip country code prefix, keep 10 digits
-            phone = phone_number.strip()
-            for prefix in ("+91", "91"):
-                if phone.startswith(prefix):
-                    phone = phone[len(prefix):]
-                    break
-            phone = phone.strip()
-
+            phone = self._normalize_phone(phone_number)
             url = f"https://2factor.in/API/V1/{api_key}/SMS/{phone}/{otp}"
 
             async with httpx.AsyncClient(timeout=15) as client:
@@ -73,15 +94,95 @@ class SMSService:
             logger.info(f"2Factor response [{response.status_code}]: {response.text}")
 
             if response.status_code == 200 and data.get("Status") == "Success":
-                logger.info(f"SMS OTP sent via 2Factor to {phone}")
+                logger.info(f"✅ SMS OTP sent via 2Factor to {phone}")
                 return True
             else:
-                logger.error(f"2Factor send failed: {response.text}")
+                logger.error(f"❌ 2Factor send failed: {response.text}")
                 return False
 
         except Exception as e:
-            logger.error(f"2Factor SMS error: {e}")
+            logger.error(f"❌ 2Factor SMS error: {e}", exc_info=True)
             return False
+
+    def _send_via_2factor_sync(self, phone_number: str, otp: str) -> bool:
+        """Send SMS OTP via 2Factor.in (SYNCHRONOUS — no event loop needed)"""
+        try:
+            api_key = settings.TWO_FACTOR_API_KEY
+            if not api_key:
+                logger.error("[2Factor-SYNC] ❌ API key not configured (TWO_FACTOR_API_KEY missing)")
+                return False
+
+            phone = self._normalize_phone(phone_number)
+            url = f"https://2factor.in/API/V1/{api_key}/SMS/{phone}/{otp}"
+            logger.info(f"[2Factor-SYNC] Calling: https://2factor.in/API/V1/****/SMS/{phone}/{otp}")
+
+            with httpx.Client(timeout=15) as client:
+                response = client.get(url)
+
+            data = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
+            logger.info(f"[2Factor-SYNC] Response [{response.status_code}]: {response.text}")
+
+            if response.status_code == 200 and data.get("Status") == "Success":
+                logger.info(f"[2Factor-SYNC] ✅ SMS OTP delivered to {phone}")
+                return True
+            else:
+                logger.error(f"[2Factor-SYNC] ❌ Send failed: {response.text}")
+                return False
+
+        except Exception as e:
+            logger.error(f"[2Factor-SYNC] ❌ Error: {e}", exc_info=True)
+            return False
+
+    def _send_via_twilio_sync(self, phone_number: str, otp: str) -> bool:
+        """Send SMS via Twilio (SYNCHRONOUS)"""
+        try:
+            from twilio.rest import Client
+            client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
+            message = client.messages.create(
+                body=f"Your Levitica HR verification code is: {otp}. Valid for 5 minutes.",
+                from_=settings.TWILIO_PHONE_NUMBER,
+                to=phone_number
+            )
+            logger.info(f"[Twilio-SYNC] ✅ SMS sent: {message.sid}")
+            return True
+        except Exception as e:
+            logger.error(f"[Twilio-SYNC] ❌ Error: {e}", exc_info=True)
+            return False
+
+    def _send_via_fast2sms_sync(self, phone_number: str, otp: str) -> bool:
+        """Send SMS via Fast2SMS (SYNCHRONOUS)"""
+        try:
+            url = "https://www.fast2sms.com/dev/bulkV2"
+            phone = phone_number.replace("+91", "").replace("+", "")
+            headers = {"authorization": settings.FAST2SMS_API_KEY}
+            payload = {"route": "otp", "variables_values": otp, "flash": 0, "numbers": phone}
+
+            with httpx.Client(timeout=10) as client:
+                response = client.post(url, headers=headers, data=payload)
+
+            if response.status_code == 200:
+                logger.info(f"[Fast2SMS-SYNC] ✅ SMS sent to {phone_number}")
+                return True
+            else:
+                logger.error(f"[Fast2SMS-SYNC] ❌ Error: {response.text}")
+                return False
+        except Exception as e:
+            logger.error(f"[Fast2SMS-SYNC] ❌ Error: {e}", exc_info=True)
+            return False
+
+    @staticmethod
+    def _normalize_phone(phone_number: str) -> str:
+        """Strip country code prefix, keep bare 10-digit number."""
+        phone = phone_number.strip().replace(" ", "").replace("-", "")
+        if phone.startswith("+91"):
+            phone = phone[3:]
+        elif phone.startswith("91") and len(phone) == 12:
+            # e.g., 919876543210 (12 digits) -> 9876543210
+            phone = phone[2:]
+        elif phone.startswith("0") and len(phone) == 11:
+            # e.g., 09876543210 (11 digits) -> 9876543210
+            phone = phone[1:]
+        return phone
 
     # ------------------------------------------------------------------
     # Twilio

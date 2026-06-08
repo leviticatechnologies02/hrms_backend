@@ -141,20 +141,16 @@ def send_otp_background(business_id: int, mobile: str, channels: List[str], otp:
     wa_ok = False
     if "sms" in channels:
         from app.services.sms_service import sms_service
-        import asyncio
-        # run async send in background sync context
-        loop = asyncio.new_event_loop()
+        logger.info(f"[OTP-BG] Sending SMS to {mobile} with OTP {otp[:2]}****")
         try:
-            sms_ok = loop.run_until_complete(
-                sms_service.send_otp(mobile, otp)
-            )
+            sms_ok = sms_service.send_otp_sync(mobile, otp)
+            logger.info(f"[OTP-BG] SMS result: {'✅ SUCCESS' if sms_ok else '❌ FAILED'}")
         except Exception as sms_err:
-            logger.error(f"SMS send error: {sms_err}")
+            logger.error(f"[OTP-BG] SMS send error: {sms_err}", exc_info=True)
             sms_ok = False
-        finally:
-            loop.close()
         if client:
             client.hset(key, "sms_sent", int(bool(sms_ok)))
+
 
     if "whatsapp" in channels:
         wa_msg = f"Levitica HRMS\n\nYour verification OTP is: {otp}\n\nValid for 5 minutes."

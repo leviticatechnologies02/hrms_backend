@@ -87,6 +87,8 @@ class Employee(Base):
     date_of_confirmation = Column(Date)
     date_of_termination = Column(Date)
     employee_status = Column(Enum(EmployeeStatus), default=EmployeeStatus.ACTIVE)
+    employment_type = Column(String(50))  # permanent, contract, intern
+    work_mode = Column(String(50))  # workfromhome, workfromoffice, hybrid
     
     # Organizational Details
     business_id = Column(Integer, ForeignKey("businesses.id"), nullable=False)

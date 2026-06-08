@@ -281,6 +281,7 @@ class FormSubmission(Base):
     first_name = Column(String(100))
     last_name = Column(String(100))
     middle_name = Column(String(100))
+    profile_image = Column(String(255))
     date_of_birth = Column(Date)
     gender = Column(String(20))
     marital_status = Column(String(20))

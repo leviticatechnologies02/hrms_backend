@@ -64,7 +64,11 @@ async def lifespan(app: FastAPI):
             from sqlalchemy import text
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE onboarding_forms ADD COLUMN IF NOT EXISTS candidate_mobile_verified BOOLEAN DEFAULT FALSE;"))
-            logger.info("✓ Auto-migration: Ensured candidate_mobile_verified column exists")
+                
+                # Add employment_type and work_mode to employees
+                conn.execute(text("ALTER TABLE employees ADD COLUMN IF NOT EXISTS employment_type VARCHAR(50);"))
+                conn.execute(text("ALTER TABLE employees ADD COLUMN IF NOT EXISTS work_mode VARCHAR(50);"))
+            logger.info("✓ Auto-migration: Ensured columns exist in database")
         except Exception as mig_err:
             logger.warning(f"Auto-migration skipped or failed: {mig_err}")
             
@@ -99,6 +103,7 @@ async def lifespan(app: FastAPI):
                 "account_holder_name": "VARCHAR(255)",
                 "emergency_contact": "VARCHAR(20)",
                 "mobile_verified": "BOOLEAN DEFAULT FALSE",
+                "profile_image": "VARCHAR(255)",
             }
             with engine.begin() as conn:
                 for col_name, col_type in columns_to_add.items():

@@ -33,8 +33,8 @@ def send_whatsapp_via_meta(phone_number: str, message: str) -> Tuple[bool, str]:
     phone_number_id = os.getenv("WHATSAPP_PHONE_NUMBER_ID")
 
     if not (token and phone_number_id):
-        logger.warning("WhatsApp not configured; message not sent")
-        return True, "whatsapp_not_configured"
+        logger.warning("WhatsApp not configured (WHATSAPP_TOKEN / WHATSAPP_PHONE_NUMBER_ID missing); message not sent")
+        return False, "whatsapp_not_configured"
 
     url = f"https://graph.facebook.com/v16.0/{phone_number_id}/messages"
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}

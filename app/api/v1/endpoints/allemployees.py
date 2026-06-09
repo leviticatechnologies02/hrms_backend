@@ -128,6 +128,17 @@ def validate_employee_access(
 
 
 # ============================================================================
+
+def get_profile_image_url(emp):
+    """
+    Return full URL of employee profile image.
+    Uses BASE_URL for relative paths.
+    """
+    profile_image_url = emp.profile.profile_image_url if getattr(emp, "profile", None) else None
+    if profile_image_url:
+        return profile_image_url if profile_image_url.startswith('http') else f"{BASE_URL}{profile_image_url}"
+    return f"{BASE_URL}/assets/img/users/user-01.jpg"
+
 # PYDANTIC MODELS
 # ============================================================================
 # Pydantic models for request/response
@@ -596,16 +607,6 @@ async def get_all_employees(
         for emp in employees:
             is_active = str(emp.employee_status).endswith("ACTIVE") if emp.employee_status else True
             
-            # Get profile image with full URL
-            profile_image_url = emp.profile.profile_image_url if emp.profile and emp.profile.profile_image_url else None
-            if profile_image_url:
-                if profile_image_url.startswith('http'):
-                    img_url = profile_image_url
-                else:
-                    img_url = f"{BASE_URL}{profile_image_url}"
-            else:
-                img_url = f"{BASE_URL}/assets/img/users/user-01.jpg"
-            
             employee_detail = {
                 "id": emp.id,
                 "name": f"{emp.first_name or ''} {emp.last_name or ''}".strip() or "Unknown Employee",
@@ -617,7 +618,7 @@ async def get_all_employees(
                 "business_id": emp.business_id,
                 "cost_center": emp.cost_center.name if emp.cost_center else "N/A",
                 "joining": emp.date_of_joining.strftime("%b %d, %Y") if emp.date_of_joining else "N/A",
-                "img": img_url,
+                "img": get_profile_image_url(emp),
                 "active": is_active
             }
             

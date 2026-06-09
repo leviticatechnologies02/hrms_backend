@@ -364,6 +364,7 @@ async def upload_onboarding_profile_photo(
     business_id: int = Path(..., description="Business ID"),
     form_token: str = Query(..., description="Onboarding form token"),
     profile_photo: UploadFile = File(..., description="Profile photo file"),
+    db: Session = Depends(get_db),
 ):
     """Upload onboarding candidate profile photo, save locally and return file path."""
 
@@ -402,6 +403,32 @@ async def upload_onboarding_profile_photo(
 
         with open(stored_file_path, "wb") as buffer:
             buffer.write(contents)
+
+        # Save the profile image URL to the FormSubmission record
+        form = (
+            db.query(OnboardingForm)
+            .filter(
+                OnboardingForm.business_id == business_id,
+                OnboardingForm.form_token == form_token,
+            )
+            .first()
+        )
+        if form:
+            submission = (
+                db.query(FormSubmission)
+                .filter(FormSubmission.form_id == form.id)
+                .order_by(FormSubmission.id.desc())
+                .first()
+            )
+            if submission:
+                # Update the FormSubmission profile image URL
+                submission.profile_image = full_url
+                # Also update the EmployeeProfile if it exists
+                from app.models.employee import Employee
+                emp = db.query(Employee).join(Employee.profile).filter(Employee.id == submission.employee_id).first()
+                if emp and emp.profile:
+                    emp.profile.profile_image_url = full_url
+                db.commit()
 
         return {
             "success": True,
@@ -1630,6 +1657,7 @@ async def submit_onboarding_form(
 
 @router.get("/{form_id}/reviewform", response_model=dict, summary="Review submitted onboarding form")
 async def review_onboarding_form(
+    request: Request,
     business_id: int = Path(..., description="Business ID"),
     form_id: int = Path(..., description="Form ID"),
     db: Session = Depends(get_db),
@@ -1744,14 +1772,30 @@ async def review_onboarding_form(
                 if isinstance(val, (datetime, date)):
                     submission_data[column.name] = val.isoformat()
                 elif column.name in ["education_details", "experience_details", "uploaded_documents", "policy_acknowledgments"]:
-                    # the frontend probably expects parsed JSON dicts here to avoid double parsing, 
-                    # but if it needs strings, it will get the DB strings.
-                    # We will attempt to parse them to be helpful, or keep them as strings.
                     submission_data[column.name] = _safe_json_parse(val)
                 else:
                     submission_data[column.name] = val
 
+        # If profile_image is null, look for uploaded photo on disk by form_token
+        if not submission_data.get("profile_image"):
+            safe_token = re.sub(r"[^A-Za-z0-9_.-]", "_", form.form_token).strip("._-")
+            if PROFILE_PHOTO_DIR.exists():
+                matching_photos = sorted(
+                    PROFILE_PHOTO_DIR.glob(f"photo_{safe_token}_*"),
+                    key=lambda p: p.stat().st_mtime,
+                    reverse=True,
+                )
+                if matching_photos:
+                    photo_path = str(matching_photos[0]).replace("\\", "/")
+                    base_url = str(request.base_url)
+                    if not base_url.endswith("/"):
+                        base_url += "/"
+                    relative_path = photo_path.lstrip("/")
+                    submission_data["profile_image"] = f"{base_url}{relative_path}"
 
+                    # Also save it to DB so next time it's found directly
+                    submission.profile_image = submission_data["profile_image"]
+                    db.commit()
 
         return {
             "success": True,

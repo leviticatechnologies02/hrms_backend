@@ -373,7 +373,6 @@ class FormSubmissionCreate(BaseModel):
     last_name: Optional[str] = Field(None, max_length=100)
     gender: Optional[str] = Field(None, max_length=20)
     date_of_birth: Optional[date] = None
-    profile_photo: Optional[str] = None
     
     # Contact Details (Step 3)
     mobile: Optional[str] = Field(None, max_length=20)

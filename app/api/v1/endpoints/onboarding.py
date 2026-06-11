@@ -1891,6 +1891,24 @@ async def approve_onboarding_form(
             form.approved_at = datetime.now()
             db.commit()
             db.refresh(form)
+            
+            # Sync profile image to EmployeeProfile
+            if submission and submission.profile_image:
+                from app.models.employee import EmployeeProfile
+                emp_profile = db.query(EmployeeProfile).filter(EmployeeProfile.employee_id == existing_employee.id).first()
+                # Parse URL to relative path if it contains http to maintain consistent DB storage
+                image_url = submission.profile_image
+                if image_url.startswith('http'):
+                    from urllib.parse import urlparse
+                    parsed = urlparse(image_url)
+                    image_url = parsed.path
+                if emp_profile:
+                    emp_profile.profile_image_url = image_url
+                else:
+                    new_profile = EmployeeProfile(employee_id=existing_employee.id, profile_image_url=image_url)
+                    db.add(new_profile)
+                db.commit()
+                
             return {
                 "form_id": form.id,
                 "employee_id": existing_employee.id,
@@ -1947,6 +1965,24 @@ async def approve_onboarding_form(
         db.commit()
         db.refresh(form)
         db.refresh(new_employee)
+        
+        # Sync profile image to EmployeeProfile
+        if submission and submission.profile_image:
+            from app.models.employee import EmployeeProfile
+            emp_profile = db.query(EmployeeProfile).filter(EmployeeProfile.employee_id == new_employee.id).first()
+            # Parse URL to relative path if it contains http to maintain consistent DB storage
+            image_url = submission.profile_image
+            if image_url.startswith('http'):
+                from urllib.parse import urlparse
+                parsed = urlparse(image_url)
+                image_url = parsed.path
+            if emp_profile:
+                emp_profile.profile_image_url = image_url
+            else:
+                new_profile = EmployeeProfile(employee_id=new_employee.id, profile_image_url=image_url)
+                db.add(new_profile)
+            db.commit()
+            
         return {
             "form_id": form.id,
             "employee_id": new_employee.id,
@@ -2153,6 +2189,22 @@ async def approve_form_frontend(
             form.approved_by = current_user.id
             form.approved_at = datetime.now()
             db.commit()
+            
+            if submission and submission.profile_image:
+                from app.models.employee import EmployeeProfile
+                emp_profile = db.query(EmployeeProfile).filter(EmployeeProfile.employee_id == form.employee_id).first()
+                image_url = submission.profile_image
+                if image_url.startswith('http'):
+                    from urllib.parse import urlparse
+                    parsed = urlparse(image_url)
+                    image_url = parsed.path
+                if emp_profile:
+                    emp_profile.profile_image_url = image_url
+                else:
+                    new_profile = EmployeeProfile(employee_id=form.employee_id, profile_image_url=image_url)
+                    db.add(new_profile)
+                db.commit()
+                
             return {"success": True, "message": "Linked to existing employee", "employee_id": existing_employee.id}
         max_employee = db.query(Employee).order_by(Employee.id.desc()).first()
         next_id = (max_employee.id + 1) if max_employee else 1
@@ -2191,6 +2243,22 @@ async def approve_form_frontend(
                     form.approved_by = current_user.id
                     form.approved_at = datetime.now()
                     db.commit()
+                    
+                    if submission and submission.profile_image:
+                        from app.models.employee import EmployeeProfile
+                        emp_profile = db.query(EmployeeProfile).filter(EmployeeProfile.employee_id == form.employee_id).first()
+                        image_url = submission.profile_image
+                        if image_url.startswith('http'):
+                            from urllib.parse import urlparse
+                            parsed = urlparse(image_url)
+                            image_url = parsed.path
+                        if emp_profile:
+                            emp_profile.profile_image_url = image_url
+                        else:
+                            new_profile = EmployeeProfile(employee_id=form.employee_id, profile_image_url=image_url)
+                            db.add(new_profile)
+                        db.commit()
+                        
                     return {"success": True, "message": "Linked to existing employee (post-conflict)", "employee_id": conflict_emp.id}
                 else:
                     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot create employee: email already exists in another business")
@@ -2203,6 +2271,22 @@ async def approve_form_frontend(
         form.approved_at = datetime.now()
         db.commit()
         db.refresh(new_employee)
+        
+        if submission and submission.profile_image:
+            from app.models.employee import EmployeeProfile
+            emp_profile = db.query(EmployeeProfile).filter(EmployeeProfile.employee_id == form.employee_id).first()
+            image_url = submission.profile_image
+            if image_url.startswith('http'):
+                from urllib.parse import urlparse
+                parsed = urlparse(image_url)
+                image_url = parsed.path
+            if emp_profile:
+                emp_profile.profile_image_url = image_url
+            else:
+                new_profile = EmployeeProfile(employee_id=form.employee_id, profile_image_url=image_url)
+                db.add(new_profile)
+            db.commit()
+            
         return {"success": True, "message": "Form approved and employee created", "employee_id": new_employee.id, "employee_code": new_employee.employee_code}
     except HTTPException:
         raise
@@ -2327,6 +2411,97 @@ async def submit_candidate_form_step(form_token: str, step_number: int, step_dat
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+# ---------------------------------------------------------------------------
+# Repair / Backfill: sync profile images from approved onboarding forms
+# ---------------------------------------------------------------------------
+@router.post("/repair/sync-profile-images", response_model=dict)
+async def repair_sync_profile_images(
+    business_id: int = Path(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_admin)
+):
+    """
+    One-time repair endpoint: For every APPROVED onboarding form that has a
+    profile_image on its submission, ensure the linked EmployeeProfile row has
+    the correct profile_image_url.  Call this once after updating the code to
+    backfill existing employees (e.g. employee ID 6).
+    """
+    validate_business_access(business_id, current_user, db)
+    try:
+        from app.models.employee import EmployeeProfile
+        from urllib.parse import urlparse
+
+        # Fetch all approved forms for this business that have an employee linked
+        approved_forms = (
+            db.query(OnboardingForm)
+            .filter(
+                OnboardingForm.business_id == business_id,
+                OnboardingForm.status == OnboardingStatus.APPROVED,
+                OnboardingForm.employee_id.isnot(None),
+            )
+            .all()
+        )
+
+        synced = []
+        skipped = []
+
+        for form in approved_forms:
+            submission = (
+                db.query(FormSubmission)
+                .filter(FormSubmission.form_id == form.id)
+                .first()
+            )
+
+            if not submission or not submission.profile_image:
+                skipped.append({"form_id": form.id, "reason": "no profile_image in submission"})
+                continue
+
+            # Normalise to a relative path so the URL rebuilds correctly via request
+            image_url = submission.profile_image
+            if image_url.startswith("http"):
+                parsed = urlparse(image_url)
+                image_url = parsed.path  # e.g. /uploads/profile_photos/...
+
+            emp_profile = (
+                db.query(EmployeeProfile)
+                .filter(EmployeeProfile.employee_id == form.employee_id)
+                .first()
+            )
+
+            if emp_profile:
+                if emp_profile.profile_image_url == image_url:
+                    skipped.append({"form_id": form.id, "employee_id": form.employee_id, "reason": "already up-to-date"})
+                    continue
+                emp_profile.profile_image_url = image_url
+            else:
+                new_profile = EmployeeProfile(
+                    employee_id=form.employee_id,
+                    profile_image_url=image_url
+                )
+                db.add(new_profile)
+
+            synced.append({"form_id": form.id, "employee_id": form.employee_id, "image_path": image_url})
+
+        db.commit()
+
+        return {
+            "success": True,
+            "synced_count": len(synced),
+            "skipped_count": len(skipped),
+            "synced": synced,
+            "skipped": skipped,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Repair failed: {str(e)}"
+        )
 
 
 # ---------------------------------------------------------------------------

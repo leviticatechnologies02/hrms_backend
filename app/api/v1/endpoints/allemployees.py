@@ -606,10 +606,49 @@ async def get_all_employees(
             offset = (page - 1) * pageSize
             employees = query.offset(offset).limit(pageSize).all()
         
+        # Build fallback dict: employee_id -> onboarding profile_image path
+        # This handles employees created via onboarding but without an EmployeeProfile row
+        from app.models.onboarding import OnboardingForm, FormSubmission, OnboardingStatus as OBStatus
+        employee_ids_in_page = [emp.id for emp in employees]
+        onboarding_photos = {}
+        if employee_ids_in_page:
+            onboarding_rows = (
+                db.query(OnboardingForm.employee_id, FormSubmission.profile_image)
+                .join(FormSubmission, FormSubmission.form_id == OnboardingForm.id, isouter=True)
+                .filter(
+                    OnboardingForm.employee_id.in_(employee_ids_in_page),
+                    OnboardingForm.status == OBStatus.APPROVED,
+                    FormSubmission.profile_image.isnot(None)
+                )
+                .all()
+            )
+            from urllib.parse import urlparse
+            for emp_id, photo_url in onboarding_rows:
+                if photo_url:
+                    if photo_url.startswith("http"):
+                        photo_url = urlparse(photo_url).path
+                    onboarding_photos[emp_id] = photo_url
+
         # Convert to simple frontend format
         frontend_employees = []
+        base_url_str = str(request.base_url).rstrip('/')
         for emp in employees:
             is_active = str(emp.employee_status).endswith("ACTIVE") if emp.employee_status else True
+
+            # Determine profile image: EmployeeProfile first, then onboarding fallback, then default
+            profile_img_path = None
+            if getattr(emp, "profile", None) and emp.profile.profile_image_url:
+                profile_img_path = emp.profile.profile_image_url
+            elif emp.id in onboarding_photos:
+                profile_img_path = onboarding_photos[emp.id]
+
+            if profile_img_path:
+                if profile_img_path.startswith("http"):
+                    img_url = profile_img_path
+                else:
+                    img_url = f"{base_url_str}/{profile_img_path.lstrip('/')}"
+            else:
+                img_url = f"{base_url_str}/assets/img/users/user-01.jpg"
             
             employee_detail = {
                 "id": emp.id,
@@ -622,7 +661,7 @@ async def get_all_employees(
                 "business_id": emp.business_id,
                 "cost_center": emp.cost_center.name if emp.cost_center else "N/A",
                 "joining": emp.date_of_joining.strftime("%b %d, %Y") if emp.date_of_joining else "N/A",
-                "img": get_profile_image_url(emp, request),
+                "img": img_url,
                 "active": is_active
             }
             
@@ -734,6 +773,29 @@ async def get_employee_summary(
         
         # Get profile image from pre-loaded relationship
         profile_image_url = employee.profile.profile_image_url if employee.profile else None
+        
+        # Fallback: check approved onboarding form submission for this employee
+        if not profile_image_url:
+            try:
+                from app.models.onboarding import OnboardingForm, FormSubmission, OnboardingStatus as OBStatus
+                from urllib.parse import urlparse
+                ob_row = (
+                    db.query(FormSubmission.profile_image)
+                    .join(OnboardingForm, OnboardingForm.id == FormSubmission.form_id)
+                    .filter(
+                        OnboardingForm.employee_id == employee_id,
+                        OnboardingForm.status == OBStatus.APPROVED,
+                        FormSubmission.profile_image.isnot(None)
+                    )
+                    .first()
+                )
+                if ob_row and ob_row.profile_image:
+                    raw = ob_row.profile_image
+                    if raw.startswith("http"):
+                        raw = urlparse(raw).path
+                    profile_image_url = raw
+            except Exception as _e:
+                print(f"⚠️ Warning: onboarding photo fallback failed: {_e}")
         
         # Determine base URL dynamically
         base_url_to_use = str(request.base_url).rstrip('/')
@@ -1204,17 +1266,44 @@ async def get_employee_basic_info(
                 print(f"⚠️ Error processing employee profile address data: {e}")
         
         # Prepare response with CONSISTENT data format
-        # Get profile image URL from employee profile
-        profile_image_url = "/assets/img/users/user-01.jpg"  # Default
+        # Get profile image URL: EmployeeProfile first, then onboarding fallback, then default
+        profile_image_url = None
         if employee_profile and employee_profile.profile_image_url:
             profile_image_url = employee_profile.profile_image_url
-            
-        # Ensure it has the full URL (prepending request.base_url if it's a relative path)
-        if profile_image_url and profile_image_url.startswith("/"):
-            base_url_str = str(request.base_url)
-            if not base_url_str.endswith("/"):
-                base_url_str += "/"
-            profile_image_url = f"{base_url_str}{profile_image_url.lstrip('/')}"
+        
+        # Fallback: check approved onboarding form submission for this employee
+        if not profile_image_url:
+            try:
+                from app.models.onboarding import OnboardingForm, FormSubmission, OnboardingStatus as OBStatus
+                from urllib.parse import urlparse
+                ob_row = (
+                    db.query(FormSubmission.profile_image)
+                    .join(OnboardingForm, OnboardingForm.id == FormSubmission.form_id)
+                    .filter(
+                        OnboardingForm.employee_id == employee_id,
+                        OnboardingForm.status == OBStatus.APPROVED,
+                        FormSubmission.profile_image.isnot(None)
+                    )
+                    .first()
+                )
+                if ob_row and ob_row.profile_image:
+                    raw = ob_row.profile_image
+                    if raw.startswith("http"):
+                        raw = urlparse(raw).path
+                    profile_image_url = raw
+            except Exception as _e:
+                print(f"⚠️ Warning: onboarding photo fallback failed: {_e}")
+        
+        # Build full URL
+        base_url_str = str(request.base_url).rstrip('/')
+        if profile_image_url:
+            if profile_image_url.startswith('http'):
+                profile_image_url = profile_image_url
+            else:
+                profile_image_url = f"{base_url_str}/{profile_image_url.lstrip('/')}"
+        else:
+            profile_image_url = f"{base_url_str}/assets/img/users/user-01.jpg"
+        
         response_data = {
             "id": employee.id,
             "name": f"{employee.first_name or ''} {employee.last_name or ''}".strip() or "Unknown Employee",

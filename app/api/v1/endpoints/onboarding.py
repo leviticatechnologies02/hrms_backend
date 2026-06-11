@@ -1833,9 +1833,13 @@ def sync_onboarding_submission_to_employee(db: Session, employee, submission):
     if submission.date_of_birth:
         employee.date_of_birth = submission.date_of_birth
     if submission.gender:
-        employee.gender = submission.gender
+        g = submission.gender.lower()
+        if g in ["male", "female", "other"]:
+            employee.gender = g
     if submission.marital_status:
-        employee.marital_status = submission.marital_status
+        m = submission.marital_status.lower()
+        if m in ["single", "married", "divorced", "widowed"]:
+            employee.marital_status = m
     if submission.blood_group:
         employee.blood_group = submission.blood_group
     if submission.nationality:
@@ -2052,7 +2056,7 @@ async def approve_onboarding_form(
             last_name=last_name,
             email=employee_data['email'],
             mobile=employee_data['mobile'],
-            employee_status='ACTIVE',
+            employee_status='active',
             date_of_joining=date.today(),
             created_by=current_user.id,
             is_active=True

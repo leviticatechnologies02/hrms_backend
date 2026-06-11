@@ -9,6 +9,8 @@ from typing import Optional, Dict, Any, List
 from pydantic import BaseModel, validator, Field
 
 from datetime import datetime, date
+import os
+import uuid
 
 from app.core.database import get_db
 from app.api.v1.deps import get_current_admin, get_current_user
@@ -129,15 +131,16 @@ def validate_employee_access(
 
 # ============================================================================
 
-def get_profile_image_url(emp):
+def get_profile_image_url(emp, request: Request = None):
     """
     Return full URL of employee profile image.
-    Uses BASE_URL for relative paths.
+    Uses request.base_url if provided, else BASE_URL for relative paths.
     """
+    base_url_to_use = str(request.base_url).rstrip('/') if request else BASE_URL
     profile_image_url = emp.profile.profile_image_url if getattr(emp, "profile", None) else None
     if profile_image_url:
-        return profile_image_url if profile_image_url.startswith('http') else f"{BASE_URL}{profile_image_url}"
-    return f"{BASE_URL}/assets/img/users/user-01.jpg"
+        return profile_image_url if profile_image_url.startswith('http') else f"{base_url_to_use}/{profile_image_url.lstrip('/')}"
+    return f"{base_url_to_use}/assets/img/users/user-01.jpg"
 
 # PYDANTIC MODELS
 # ============================================================================
@@ -427,6 +430,7 @@ async def get_filter_options(
 
 @router.get("/")
 async def get_all_employees(
+    request: Request,
     business_id: int = Path(..., description="Business ID"),
     page: int = Query(1, ge=1),
     pageSize: int = Query(10, ge=1, le=1000),
@@ -618,7 +622,7 @@ async def get_all_employees(
                 "business_id": emp.business_id,
                 "cost_center": emp.cost_center.name if emp.cost_center else "N/A",
                 "joining": emp.date_of_joining.strftime("%b %d, %Y") if emp.date_of_joining else "N/A",
-                "img": get_profile_image_url(emp),
+                "img": get_profile_image_url(emp, request),
                 "active": is_active
             }
             
@@ -692,6 +696,7 @@ async def update_employee_status(
 
 @router.get("/{employee_id}/summary", response_model=dict)
 async def get_employee_summary(
+    request: Request,
     business_id: int = Path(..., description="Business ID"),
     employee_id: int = Path(..., description="Employee ID"),
     db: Session = Depends(get_db),
@@ -730,17 +735,20 @@ async def get_employee_summary(
         # Get profile image from pre-loaded relationship
         profile_image_url = employee.profile.profile_image_url if employee.profile else None
         
+        # Determine base URL dynamically
+        base_url_to_use = str(request.base_url).rstrip('/')
+        
         # Build full URL for profile image
         if profile_image_url:
             if profile_image_url.startswith('http'):
                 full_profile_image_url = profile_image_url
             else:
-                full_profile_image_url = f"{BASE_URL}{profile_image_url}"
+                full_profile_image_url = f"{base_url_to_use}/{profile_image_url.lstrip('/')}"
         else:
-            full_profile_image_url = f"{BASE_URL}/assets/img/users/user-01.jpg"
+            full_profile_image_url = f"{base_url_to_use}/assets/img/users/user-01.jpg"
         
         print(f"🖼️ Profile image URL: {full_profile_image_url}")
-        print(f"   BASE_URL: {BASE_URL}")
+        print(f"   BASE_URL used: {base_url_to_use}")
         print(f"   Raw profile_image_url: {profile_image_url}")
         
         # Get related data from pre-loaded relationships (no additional queries)
@@ -756,19 +764,19 @@ async def get_employee_summary(
             "reportingManager": {
                 "name": "Not Defined",
                 "code": "",
-                "img": f"{BASE_URL}/assets/img/users/user-01.jpg"
+                "img": f"{base_url_to_use}/assets/img/users/user-01.jpg"
             },
             "hrManager": {
                 "name": "Not Defined",
                 "code": "",
-                "img": f"{BASE_URL}/assets/img/users/user-01.jpg"
+                "img": f"{base_url_to_use}/assets/img/users/user-01.jpg"
             },
 
             # Additional logging or handling can be added here
             "indirectManager": {
                 "name": "Not Defined",
                 "code": "",
-                "img": f"{BASE_URL}/assets/img/users/user-01.jpg"
+                "img": f"{base_url_to_use}/assets/img/users/user-01.jpg"
             }
         }
         
@@ -789,9 +797,9 @@ async def get_employee_summary(
                         if manager_img.startswith('http'):
                             manager_img_url = manager_img
                         else:
-                            manager_img_url = f"{BASE_URL}{manager_img}"
+                            manager_img_url = f"{base_url_to_use}/{manager_img.lstrip('/')}"
                     else:
-                        manager_img_url = f"{BASE_URL}/assets/img/users/user-01.jpg"
+                        manager_img_url = f"{base_url_to_use}/assets/img/users/user-01.jpg"
                     
                     managers["reportingManager"] = {
                         "name": f"{reporting_manager.first_name or ''} {reporting_manager.last_name or ''}".strip(),
@@ -817,9 +825,9 @@ async def get_employee_summary(
                         if hr_img.startswith('http'):
                             hr_img_url = hr_img
                         else:
-                            hr_img_url = f"{BASE_URL}{hr_img}"
+                            hr_img_url = f"{base_url_to_use}/{hr_img.lstrip('/')}"
                     else:
-                        hr_img_url = f"{BASE_URL}/assets/img/users/user-01.jpg"
+                        hr_img_url = f"{base_url_to_use}/assets/img/users/user-01.jpg"
                     
                     managers["hrManager"] = {
                         "name": f"{hr_manager.first_name or ''} {hr_manager.last_name or ''}".strip(),
@@ -845,9 +853,9 @@ async def get_employee_summary(
                         if indirect_img.startswith('http'):
                             indirect_img_url = indirect_img
                         else:
-                            indirect_img_url = f"{BASE_URL}{indirect_img}"
+                            indirect_img_url = f"{base_url_to_use}/{indirect_img.lstrip('/')}"
                     else:
-                        indirect_img_url = f"{BASE_URL}/assets/img/users/user-01.jpg"
+                        indirect_img_url = f"{base_url_to_use}/assets/img/users/user-01.jpg"
                     
                     managers["indirectManager"] = {
                         "name": f"{indirect_manager.first_name or ''} {indirect_manager.last_name or ''}".strip(),
@@ -873,9 +881,9 @@ async def get_employee_summary(
                     if report_img.startswith('http'):
                         report_img_url = report_img
                     else:
-                        report_img_url = f"{BASE_URL}{report_img}"
+                        report_img_url = f"{base_url_to_use}/{report_img.lstrip('/')}"
                 else:
-                    report_img_url = f"{BASE_URL}/assets/img/users/user-01.jpg"
+                    report_img_url = f"{base_url_to_use}/assets/img/users/user-01.jpg"
                 
                 direct_reports.append({
                     "id": report.id,
@@ -1021,6 +1029,7 @@ async def get_employee_summary(
 
 @router.get("/{employee_id}/basic-info")
 async def get_employee_basic_info(
+    request: Request,
     business_id: int = Path(..., description="Business ID"),
     employee_id: int = Path(..., description="Employee ID"),
     db: Session = Depends(get_db),
@@ -1199,7 +1208,13 @@ async def get_employee_basic_info(
         profile_image_url = "/assets/img/users/user-01.jpg"  # Default
         if employee_profile and employee_profile.profile_image_url:
             profile_image_url = employee_profile.profile_image_url
-        
+            
+        # Ensure it has the full URL (prepending request.base_url if it's a relative path)
+        if profile_image_url and profile_image_url.startswith("/"):
+            base_url_str = str(request.base_url)
+            if not base_url_str.endswith("/"):
+                base_url_str += "/"
+            profile_image_url = f"{base_url_str}{profile_image_url.lstrip('/')}"
         response_data = {
             "id": employee.id,
             "name": f"{employee.first_name or ''} {employee.last_name or ''}".strip() or "Unknown Employee",
@@ -1994,6 +2009,7 @@ async def update_employee(
 
 @router.post("/{employee_id}/upload-profile-image")
 async def upload_employee_profile_image(
+    request: Request,
     business_id: int = Path(..., description="Business ID"),
     employee_id: int = Path(..., description="Employee ID"),
     file: UploadFile = File(...),
@@ -2110,8 +2126,11 @@ async def upload_employee_profile_image(
         db.commit()
         db.refresh(employee_profile)
         
-        # Build full URL for the uploaded image
-        full_image_url = f"{BASE_URL}{relative_path}"
+        # Build full URL for the uploaded image using request.base_url
+        base_url_str = str(request.base_url)
+        if not base_url_str.endswith("/"):
+            base_url_str += "/"
+        full_image_url = f"{base_url_str}{relative_path.lstrip('/')}"
         
         print(f"✅ Profile image uploaded for employee {employee_id}: {relative_path}")
         print(f"   Full URL: {full_image_url}")

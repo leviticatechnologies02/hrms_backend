@@ -423,12 +423,23 @@ async def upload_onboarding_profile_photo(
             if submission:
                 # Update the FormSubmission profile image URL
                 submission.profile_image = full_url
-                # Also update the EmployeeProfile if it exists
-                from app.models.employee import Employee
-                emp = db.query(Employee).join(Employee.profile).filter(Employee.id == submission.employee_id).first()
-                if emp and emp.profile:
-                    emp.profile.profile_image_url = full_url
-                db.commit()
+            
+            # Ensure an EmployeeProfile exists and update its image URL if employee is already linked
+            if form.employee_id:
+                from app.models.employee import EmployeeProfile
+                # Try to fetch existing profile
+                profile = db.query(EmployeeProfile).filter(EmployeeProfile.employee_id == form.employee_id).first()
+                if profile:
+                    profile.profile_image_url = full_url
+                else:
+                    # Create a new EmployeeProfile record linked to the employee
+                    new_profile = EmployeeProfile(
+                        employee_id=form.employee_id,
+                        profile_image_url=full_url,
+                    )
+                    db.add(new_profile)
+            
+            db.commit()
 
         return {
             "success": True,

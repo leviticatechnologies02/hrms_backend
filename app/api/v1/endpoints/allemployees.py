@@ -3180,27 +3180,81 @@ async def get_employee_address(
                 detail=f"Employee with ID {employee_id} not found"
             )
         
-        # Safely get address fields with defaults
-        current_address = getattr(employee, 'current_address', None) or ""
-        permanent_address = getattr(employee, 'permanent_address', None) or ""
+        # Safely get address fields with defaults from EmployeeProfile or fallback
+        profile = getattr(employee, 'profile', None)
+        
+        current_street = ""
+        current_city = ""
+        current_state = ""
+        current_pincode = ""
+        current_country = "India"
+        
+        permanent_street = ""
+        permanent_city = ""
+        permanent_state = ""
+        permanent_pincode = ""
+        permanent_country = "India"
+        
+        if profile:
+            current_street = (profile.present_address_line1 or "") + (" " + profile.present_address_line2 if profile.present_address_line2 else "")
+            current_street = current_street.strip() or getattr(employee, 'current_address', None) or ""
+            current_city = profile.present_city or ""
+            current_state = profile.present_state or ""
+            current_pincode = profile.present_pincode or ""
+            current_country = profile.present_country or "India"
+            
+            permanent_street = (profile.permanent_address_line1 or "") + (" " + profile.permanent_address_line2 if profile.permanent_address_line2 else "")
+            permanent_street = permanent_street.strip() or getattr(employee, 'permanent_address', None) or ""
+            permanent_city = profile.permanent_city or ""
+            permanent_state = profile.permanent_state or ""
+            permanent_pincode = profile.permanent_pincode or ""
+            permanent_country = profile.permanent_country or "India"
+        else:
+            current_street = getattr(employee, 'current_address', None) or ""
+            permanent_street = getattr(employee, 'permanent_address', None) or ""
+            
+        # Fallback to approved onboarding FormSubmission if profile/employee is missing address details
+        if not current_city and not current_state and not current_pincode and not permanent_city and not permanent_state and not permanent_pincode:
+            try:
+                from app.models.onboarding import OnboardingForm, FormSubmission, OnboardingStatus as OBStatus
+                ob_form = db.query(OnboardingForm).filter(OnboardingForm.employee_id == employee_id, OnboardingForm.status == OBStatus.APPROVED).first()
+                if ob_form:
+                    sub = db.query(FormSubmission).filter(FormSubmission.form_id == ob_form.id).first()
+                    if sub:
+                        if sub.present_address_line1 or sub.present_address:
+                            current_street = (sub.present_address_line1 or "") + (" " + sub.present_address_line2 if sub.present_address_line2 else "")
+                            current_street = current_street.strip() or sub.present_address or ""
+                            current_city = sub.present_city or ""
+                            current_state = sub.present_state or ""
+                            current_pincode = sub.present_pincode or ""
+                            current_country = sub.present_country or "India"
+                        if sub.permanent_address_line1 or sub.permanent_address:
+                            permanent_street = (sub.permanent_address_line1 or "") + (" " + sub.permanent_address_line2 if sub.permanent_address_line2 else "")
+                            permanent_street = permanent_street.strip() or sub.permanent_address or ""
+                            permanent_city = sub.permanent_city or ""
+                            permanent_state = sub.permanent_state or ""
+                            permanent_pincode = sub.permanent_pincode or ""
+                            permanent_country = sub.permanent_country or "India"
+            except Exception as _e:
+                print(f"⚠️ Warning: fallback address lookup failed in /address: {_e}")
         
         return {
             "id": employee.id,
             "name": f"{employee.first_name or ''} {employee.last_name or ''}".strip(),
             "addresses": {
                 "current": {
-                    "street": current_address,
-                    "city": "",
-                    "state": "",
-                    "pincode": "",
-                    "country": "India"
+                    "street": current_street,
+                    "city": current_city,
+                    "state": current_state,
+                    "pincode": current_pincode,
+                    "country": current_country
                 },
                 "permanent": {
-                    "street": permanent_address,
-                    "city": "",
-                    "state": "",
-                    "pincode": "",
-                    "country": "India"
+                    "street": permanent_street,
+                    "city": permanent_city,
+                    "state": permanent_state,
+                    "pincode": permanent_pincode,
+                    "country": permanent_country
                 }
             }
         }
@@ -9624,6 +9678,66 @@ async def get_employee_addresses(
                 "fullAddress": f"{profile.present_address_line1 or employee.current_address or ''}, {profile.present_city or ''}, {profile.present_state or ''}, {profile.present_country or 'India'} - {profile.present_pincode or ''}".strip(", -")
             }
             addresses.append(present_address)
+        
+        # If no addresses found in EmployeeProfile, fallback to approved onboarding FormSubmission
+        if not addresses:
+            try:
+                from app.models.onboarding import OnboardingForm, FormSubmission, OnboardingStatus as OBStatus
+                ob_form = (
+                    db.query(OnboardingForm)
+                    .filter(
+                        OnboardingForm.employee_id == employee_id,
+                        OnboardingForm.status == OBStatus.APPROVED
+                    )
+                    .first()
+                )
+                if ob_form:
+                    sub = db.query(FormSubmission).filter(FormSubmission.form_id == ob_form.id).first()
+                    if sub:
+                        # Permanent address from submission
+                        if sub.permanent_address_line1 or sub.permanent_address:
+                            addresses.append({
+                                "id": f"{employee_id}_permanent",
+                                "type": "permanent",
+                                "addressType": "Permanent",
+                                "addressLine1": sub.permanent_address_line1 or sub.permanent_address or "",
+                                "addressLine2": sub.permanent_address_line2 or "",
+                                "city": sub.permanent_city or "",
+                                "state": sub.permanent_state or "",
+                                "country": sub.permanent_country or "India",
+                                "pincode": sub.permanent_pincode or "",
+                                "fullAddress": ", ".join(filter(None, [
+                                    sub.permanent_address_line1 or sub.permanent_address,
+                                    sub.permanent_address_line2,
+                                    sub.permanent_city,
+                                    sub.permanent_state,
+                                    sub.permanent_country or "India",
+                                    sub.permanent_pincode
+                                ]))
+                            })
+                        # Present address from submission
+                        if sub.present_address_line1 or sub.present_address:
+                            addresses.append({
+                                "id": f"{employee_id}_present",
+                                "type": "present",
+                                "addressType": "Present",
+                                "addressLine1": sub.present_address_line1 or sub.present_address or "",
+                                "addressLine2": sub.present_address_line2 or "",
+                                "city": sub.present_city or "",
+                                "state": sub.present_state or "",
+                                "country": sub.present_country or "India",
+                                "pincode": sub.present_pincode or "",
+                                "fullAddress": ", ".join(filter(None, [
+                                    sub.present_address_line1 or sub.present_address,
+                                    sub.present_address_line2,
+                                    sub.present_city,
+                                    sub.present_state,
+                                    sub.present_country or "India",
+                                    sub.present_pincode
+                                ]))
+                            })
+            except Exception as _e:
+                print(f"⚠️ Warning: onboarding address fallback failed: {_e}")
         
         return {
             "success": True,

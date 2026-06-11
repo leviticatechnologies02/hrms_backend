@@ -1818,8 +1818,125 @@ async def review_onboarding_form(
         }
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+def sync_onboarding_submission_to_employee(db: Session, employee, submission):
+    if not submission:
+        return
+    
+    # Update Employee fields from submission
+    if submission.first_name:
+        employee.first_name = submission.first_name
+    if submission.last_name:
+        employee.last_name = submission.last_name
+    if submission.middle_name:
+        employee.middle_name = submission.middle_name
+    if submission.date_of_birth:
+        employee.date_of_birth = submission.date_of_birth
+    if submission.gender:
+        employee.gender = submission.gender
+    if submission.marital_status:
+        employee.marital_status = submission.marital_status
+    if submission.blood_group:
+        employee.blood_group = submission.blood_group
+    if submission.nationality:
+        employee.nationality = submission.nationality
+    if submission.mobile:
+        employee.mobile = submission.mobile
+    if submission.alternate_mobile:
+        employee.alternate_mobile = submission.alternate_mobile
+    if submission.father_name:
+        employee.father_name = submission.father_name
+    if submission.mother_name:
+        employee.mother_name = submission.mother_name
+    if submission.aadhaar_number:
+        employee.aadhar_number = submission.aadhaar_number
+    if submission.passport_number:
+        employee.passport_number = submission.passport_number
+    if submission.driving_license_number:
+        employee.driving_license = submission.driving_license_number
+        
+    if submission.emergency_contact_name:
+        employee.emergency_contact = submission.emergency_contact_name
+    if submission.emergency_contact_mobile:
+        employee.emergency_phone = submission.emergency_contact_mobile
+    elif submission.emergency_contact:
+        employee.emergency_phone = submission.emergency_contact
+        
+    if submission.present_address:
+        employee.current_address = submission.present_address
+    elif submission.present_address_line1:
+        addr_parts = [submission.present_address_line1, submission.present_address_line2, submission.present_city, submission.present_state, submission.present_country or "India", submission.present_pincode]
+        employee.current_address = ", ".join([p for p in addr_parts if p])
+        
+    if submission.permanent_address:
+        employee.permanent_address = submission.permanent_address
+    elif submission.permanent_address_line1:
+        addr_parts = [submission.permanent_address_line1, submission.permanent_address_line2, submission.permanent_city, submission.permanent_state, submission.permanent_country or "India", submission.permanent_pincode]
+        employee.permanent_address = ", ".join([p for p in addr_parts if p])
+
+    # Update EmployeeProfile fields
+    from app.models.employee import EmployeeProfile
+    profile = db.query(EmployeeProfile).filter(EmployeeProfile.employee_id == employee.id).first()
+    if not profile:
+        profile = EmployeeProfile(employee_id=employee.id)
+        db.add(profile)
+        
+    if submission.present_address_line1:
+        profile.present_address_line1 = submission.present_address_line1
+    if submission.present_address_line2:
+        profile.present_address_line2 = submission.present_address_line2
+    if submission.present_city:
+        profile.present_city = submission.present_city
+    if submission.present_state:
+        profile.present_state = submission.present_state
+    if submission.present_country:
+        profile.present_country = submission.present_country
+    if submission.present_pincode:
+        profile.present_pincode = submission.present_pincode
+        
+    if submission.permanent_address_line1:
+        profile.permanent_address_line1 = submission.permanent_address_line1
+    if submission.permanent_address_line2:
+        profile.permanent_address_line2 = submission.permanent_address_line2
+    if submission.permanent_city:
+        profile.permanent_city = submission.permanent_city
+    if submission.permanent_state:
+        profile.permanent_state = submission.permanent_state
+    if submission.permanent_country:
+        profile.permanent_country = submission.permanent_country
+    if submission.permanent_pincode:
+        profile.permanent_pincode = submission.permanent_pincode
+        
+    if submission.pan_number:
+        profile.pan_number = submission.pan_number
+    if submission.aadhaar_number:
+        profile.aadhaar_number = submission.aadhaar_number
+    if submission.uan_number:
+        profile.uan_number = submission.uan_number
+    if submission.esi_number:
+        profile.esi_number = submission.esi_number
+        
+    if submission.bank_name:
+        profile.bank_name = submission.bank_name
+    if submission.account_number:
+        profile.bank_account_number = submission.account_number
+    if submission.ifsc_code:
+        profile.bank_ifsc_code = submission.ifsc_code
+        
+    if submission.emergency_contact_name:
+        profile.emergency_contact_name = submission.emergency_contact_name
+    if submission.emergency_contact_relationship:
+        profile.emergency_contact_relationship = submission.emergency_contact_relationship
+    if submission.emergency_contact_mobile:
+        profile.emergency_contact_mobile = submission.emergency_contact_mobile
+        
+    if submission.profile_image:
+        image_url = submission.profile_image
+        if image_url.startswith('http'):
+            from urllib.parse import urlparse
+            parsed = urlparse(image_url)
+            image_url = parsed.path
+        profile.profile_image_url = image_url
 
 
 @router.post("/{form_id}/approve", response_model=Dict[str, Any])
@@ -1889,26 +2006,13 @@ async def approve_onboarding_form(
             form.status = OnboardingStatus.APPROVED
             form.approved_by = current_user.id
             form.approved_at = datetime.now()
+            
+            # Sync submission details (photo + addresses etc.)
+            sync_onboarding_submission_to_employee(db, existing_employee, submission)
+            
             db.commit()
             db.refresh(form)
             
-            # Sync profile image to EmployeeProfile
-            if submission and submission.profile_image:
-                from app.models.employee import EmployeeProfile
-                emp_profile = db.query(EmployeeProfile).filter(EmployeeProfile.employee_id == existing_employee.id).first()
-                # Parse URL to relative path if it contains http to maintain consistent DB storage
-                image_url = submission.profile_image
-                if image_url.startswith('http'):
-                    from urllib.parse import urlparse
-                    parsed = urlparse(image_url)
-                    image_url = parsed.path
-                if emp_profile:
-                    emp_profile.profile_image_url = image_url
-                else:
-                    new_profile = EmployeeProfile(employee_id=existing_employee.id, profile_image_url=image_url)
-                    db.add(new_profile)
-                db.commit()
-                
             return {
                 "form_id": form.id,
                 "employee_id": existing_employee.id,
@@ -1958,6 +2062,10 @@ async def approve_onboarding_form(
             
         db.add(new_employee)
         db.flush()
+        
+        # Sync submission details (photo + addresses etc.)
+        sync_onboarding_submission_to_employee(db, new_employee, submission)
+        
         form.status = OnboardingStatus.APPROVED
         form.approved_by = current_user.id
         form.approved_at = datetime.now()
@@ -1966,23 +2074,6 @@ async def approve_onboarding_form(
         db.refresh(form)
         db.refresh(new_employee)
         
-        # Sync profile image to EmployeeProfile
-        if submission and submission.profile_image:
-            from app.models.employee import EmployeeProfile
-            emp_profile = db.query(EmployeeProfile).filter(EmployeeProfile.employee_id == new_employee.id).first()
-            # Parse URL to relative path if it contains http to maintain consistent DB storage
-            image_url = submission.profile_image
-            if image_url.startswith('http'):
-                from urllib.parse import urlparse
-                parsed = urlparse(image_url)
-                image_url = parsed.path
-            if emp_profile:
-                emp_profile.profile_image_url = image_url
-            else:
-                new_profile = EmployeeProfile(employee_id=new_employee.id, profile_image_url=image_url)
-                db.add(new_profile)
-            db.commit()
-            
         return {
             "form_id": form.id,
             "employee_id": new_employee.id,

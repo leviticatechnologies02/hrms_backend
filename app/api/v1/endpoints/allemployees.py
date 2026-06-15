@@ -3276,6 +3276,7 @@ async def get_employee_address(
 
 @router.get("/{employee_id:int}/work-profile")
 async def get_employee_work_profile(
+    request: Request,
     business_id: int = Path(..., description="Business ID"),
     employee_id: int = Path(..., description="Employee ID"),
     db: Session = Depends(get_db),
@@ -3284,15 +3285,45 @@ async def get_employee_work_profile(
     """Get employee work profile information"""
     try:
         from app.models.employee import Employee
+        from sqlalchemy.orm import joinedload
         
         # Validate business and employee access with business isolation
         validate_business_access(business_id, current_user, db)
-        employee = validate_employee_access(db, employee_id, current_user, business_id)
+        
+        # Eagerly load relationships for managers, department, designation, location
+        employee = db.query(Employee).options(
+            joinedload(Employee.department),
+            joinedload(Employee.designation),
+            joinedload(Employee.location),
+            joinedload(Employee.reporting_manager).joinedload(Employee.profile),
+            joinedload(Employee.reporting_manager).joinedload(Employee.designation),
+        ).filter(
+            Employee.id == employee_id,
+            Employee.business_id == business_id
+        ).first()
+        
         if not employee:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Employee with ID {employee_id} not found"
             )
+        
+        base_url_str = str(request.base_url).rstrip('/')
+        default_img = f"{base_url_str}/assets/img/users/user-01.jpg"
+        
+        # Helper to build manager info dict
+        def build_manager_info(mgr_employee):
+            if not mgr_employee:
+                return {"id": None, "name": "", "img": default_img}
+            mgr_img = default_img
+            if getattr(mgr_employee, 'profile', None) and mgr_employee.profile.profile_image_url:
+                img_val = mgr_employee.profile.profile_image_url
+                mgr_img = img_val if img_val.startswith('http') else f"{base_url_str}/{img_val.lstrip('/')}"
+            return {
+                "id": mgr_employee.id,
+                "name": f"{mgr_employee.first_name or ''} {mgr_employee.last_name or ''}".strip(),
+                "img": mgr_img
+            }
         
         # Get related data safely with defaults
         department_name = "General"
@@ -3317,6 +3348,27 @@ async def get_employee_work_profile(
         except:
             pass
         
+        # Build reporting manager info from eagerly loaded relationship
+        reporting_manager_info = build_manager_info(
+            employee.reporting_manager if hasattr(employee, 'reporting_manager') else None
+        )
+        
+        # HR Manager - query separately since it's by ID field
+        hr_manager_info = {"id": None, "name": "", "img": default_img}
+        if hasattr(employee, 'hr_manager_id') and employee.hr_manager_id:
+            hr_mgr = db.query(Employee).options(
+                joinedload(Employee.profile)
+            ).filter(Employee.id == employee.hr_manager_id).first()
+            hr_manager_info = build_manager_info(hr_mgr)
+        
+        # Indirect Manager - query separately since it's by ID field
+        indirect_manager_info = {"id": None, "name": "", "img": default_img}
+        if hasattr(employee, 'indirect_manager_id') and employee.indirect_manager_id:
+            indirect_mgr = db.query(Employee).options(
+                joinedload(Employee.profile)
+            ).filter(Employee.id == employee.indirect_manager_id).first()
+            indirect_manager_info = build_manager_info(indirect_mgr)
+        
         return {
             "id": employee.id,
             "name": f"{employee.first_name or ''} {employee.last_name or ''}".strip(),
@@ -3328,7 +3380,9 @@ async def get_employee_work_profile(
                 "dateOfJoining": employee.date_of_joining.isoformat() if employee.date_of_joining else "",
                 "employmentType": "Full Time",
                 "workingHours": "9 hours",
-                "reportingManager": "",
+                "reportingManager": reporting_manager_info,
+                "hrManager": hr_manager_info,
+                "indirectManager": indirect_manager_info,
                 "status": employee.employee_status or "active"
             }
         }
@@ -3337,6 +3391,8 @@ async def get_employee_work_profile(
         raise
     except Exception as e:
         print(f"ERROR in get_employee_work_profile: {str(e)}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to fetch employee work profile: {str(e)}"
@@ -8442,6 +8498,11 @@ async def add_work_profile_revision(
         # Validate business and employee
         validate_business_access(business_id, current_user, db)
         employee = validate_employee_access(db, employee_id, current_user, business_id)
+        if not employee:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Employee with ID {employee_id} not found"
+            )
 
         print(f"DEBUG: Adding work profile revision for employee {employee_id}")
         print(f"DEBUG: Revision data: {revision_data}")
@@ -8450,24 +8511,78 @@ async def add_work_profile_revision(
         print(f"  - hrManagerId: {revision_data.hrManagerId}")
         print(f"  - indirectManagerId: {revision_data.indirectManagerId}")
         
-        # Check if employee exists
-        # Validate employee access with business isolation
-
-        employee = validate_employee_access(db, employee_id, current_user)
-        if not employee:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Employee with ID {employee_id} not found"
-            )
-        
         print(f"DEBUG: Employee found: {employee.first_name} {employee.last_name}")
         
         # Extract and validate revision data
         month = revision_data.month
         year = revision_data.year
         
+        # Parse effective_from / effectiveFrom if provided
+        effective_from_val = getattr(revision_data, 'effective_from', None) or getattr(revision_data, 'effectiveFrom', None)
+        if effective_from_val:
+            from datetime import datetime
+            parsed_month, parsed_year = None, None
+            # Try ISO format
+            try:
+                cleaned = str(effective_from_val).replace('Z', '+00:00')
+                dt = datetime.fromisoformat(cleaned)
+                parsed_month, parsed_year = dt.month, dt.year
+            except ValueError:
+                pass
+            
+            # Try YYYY-MM-DD
+            if not parsed_month:
+                try:
+                    dt = datetime.strptime(str(effective_from_val), "%Y-%m-%d")
+                    parsed_month, parsed_year = dt.month, dt.year
+                except ValueError:
+                    pass
+                    
+            # Try YYYY-MM
+            if not parsed_month:
+                try:
+                    dt = datetime.strptime(str(effective_from_val), "%Y-%m")
+                    parsed_month, parsed_year = dt.month, dt.year
+                except ValueError:
+                    pass
+            
+            # Try MM/YYYY
+            if not parsed_month:
+                try:
+                    dt = datetime.strptime(str(effective_from_val), "%m/%Y")
+                    parsed_month, parsed_year = dt.month, dt.year
+                except ValueError:
+                    pass
+            
+            # Try MM-YYYY
+            if not parsed_month:
+                try:
+                    dt = datetime.strptime(str(effective_from_val), "%m-%Y")
+                    parsed_month, parsed_year = dt.month, dt.year
+                except ValueError:
+                    pass
+            
+            # Try Month Year name
+            if not parsed_month:
+                try:
+                    dt = datetime.strptime(str(effective_from_val), "%B %Y")
+                    parsed_month, parsed_year = dt.month, dt.year
+                except ValueError:
+                    pass
+            if not parsed_month:
+                try:
+                    dt = datetime.strptime(str(effective_from_val), "%b %Y")
+                    parsed_month, parsed_year = dt.month, dt.year
+                except ValueError:
+                    pass
+
+            if parsed_month and parsed_year:
+                month = parsed_month
+                year = parsed_year
+        
         # Get optional fields
-        business_id = revision_data.businessId
+        # Use path-level business_id; optionally override with body businessId if provided
+        revision_business_id = revision_data.businessId if revision_data.businessId else business_id
         location_id = revision_data.locationId
             
         cost_center_id = revision_data.costCenterId
@@ -8513,7 +8628,14 @@ async def add_work_profile_revision(
         elif indirect_manager_id:
             indirect_manager_id = int(indirect_manager_id)
             
-        is_promotion = revision_data.isPromotion if hasattr(revision_data, 'isPromotion') else False
+        # Determine is_promotion
+        is_promotion = False
+        if getattr(revision_data, 'promotion', None) is not None:
+            is_promotion = bool(revision_data.promotion)
+        elif getattr(revision_data, 'promation', None) is not None:
+            is_promotion = bool(revision_data.promation)
+        elif getattr(revision_data, 'isPromotion', None) is not None:
+            is_promotion = bool(revision_data.isPromotion)
         
         print(f"DEBUG: Processed values:")
         print(f"  business_id: {business_id}")
@@ -8546,14 +8668,14 @@ async def add_work_profile_revision(
         validation_errors = []
         
         # Only validate if the ID is provided and not None
-        if business_id and business_id > 0:
+        if revision_business_id and revision_business_id > 0:
             try:
-                business = db.query(Business).filter(Business.id == business_id).first()
+                business = db.query(Business).filter(Business.id == revision_business_id).first()
                 if not business:
-                    validation_errors.append(f"Business with ID {business_id} not found")
+                    validation_errors.append(f"Business with ID {revision_business_id} not found")
             except Exception as e:
                 print(f"Warning: Could not validate business: {e}")
-                validation_errors.append(f"Could not validate business with ID {business_id}")
+                validation_errors.append(f"Could not validate business with ID {revision_business_id}")
         
         if location_id and location_id > 0:
             try:
@@ -8679,8 +8801,8 @@ async def add_work_profile_revision(
         updated_fields = []
         
         # Update fields that are provided in the request
-        if business_id is not None:
-            employee.business_id = business_id
+        if revision_business_id is not None:
+            employee.business_id = revision_business_id
             updated_fields.append("business_id")
         
         if location_id is not None:
@@ -8758,15 +8880,15 @@ async def add_work_profile_revision(
                 return None
             
             # Track each field change with readable names
-            if business_id != old_business_id:
+            if revision_business_id != old_business_id:
                 old_val = None
                 new_val = None
                 if old_business_id:
                     old_biz = db.query(Business).filter(Business.id == old_business_id).first()
                     old_val = old_biz.business_name if old_biz else f"ID {old_business_id}"
-                if business_id:
-                    new_biz = db.query(Business).filter(Business.id == business_id).first()
-                    new_val = new_biz.business_name if new_biz else f"ID {business_id}"
+                if revision_business_id:
+                    new_biz = db.query(Business).filter(Business.id == revision_business_id).first()
+                    new_val = new_biz.business_name if new_biz else f"ID {revision_business_id}"
                 changes['Business'] = {'old': old_val, 'new': new_val}
             
             if location_id != old_location_id:

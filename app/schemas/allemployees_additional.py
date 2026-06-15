@@ -51,8 +51,8 @@ class SalaryRevisionDeleteRequest(BaseModel):
 
 class WorkProfileRevisionRequest(BaseModel):
     """Work profile revision request"""
-    month: int = Field(..., description="Month (1-12)", ge=1, le=12, example=2)
-    year: int = Field(..., description="Year", ge=2020, le=2030, example=2026)
+    month: Optional[int] = Field(None, description="Month (1-12)", ge=1, le=12, example=2)
+    year: Optional[int] = Field(None, description="Year", ge=2020, le=2030, example=2026)
     businessId: Optional[int] = Field(None, description="Business ID", gt=0, example=1)
     locationId: Optional[int] = Field(None, description="Location ID", gt=0, example=1)
     costCenterId: Optional[int] = Field(None, description="Cost center ID", gt=0, example=1)
@@ -63,6 +63,10 @@ class WorkProfileRevisionRequest(BaseModel):
     hrManagerId: Optional[int] = Field(None, description="HR Manager ID", example=11)
     indirectManagerId: Optional[int] = Field(None, description="Indirect Manager ID", example=12)
     isPromotion: Optional[bool] = Field(False, description="Is this a promotion?", example=False)
+    promotion: Optional[bool] = Field(None, description="Is this a promotion?", example=False)
+    promation: Optional[bool] = Field(None, description="Is this a promotion?", example=False)
+    effectiveFrom: Optional[str] = Field(None, description="Effective from date (format month and year)", example="2026-02")
+    effective_from: Optional[str] = Field(None, description="Effective from date (format month and year)", example="2026-02")
     employmentType: Optional[str] = Field(None, description="Employment type", max_length=50, example="Full-time")
     notes: Optional[str] = Field(None, description="Revision notes", max_length=500, example="Promoted to Senior Developer")
     
@@ -70,7 +74,7 @@ class WorkProfileRevisionRequest(BaseModel):
     @classmethod
     def validate_month(cls, v):
         """Validate month"""
-        if v < 1 or v > 12:
+        if v is not None and (v < 1 or v > 12):
             raise ValueError("Month must be between 1 and 12")
         return v
     
@@ -78,7 +82,7 @@ class WorkProfileRevisionRequest(BaseModel):
     @classmethod
     def validate_year(cls, v):
         """Validate year"""
-        if v < 2020 or v > 2030:
+        if v is not None and (v < 2020 or v > 2030):
             raise ValueError("Year must be between 2020 and 2030")
         return v
     
@@ -94,7 +98,9 @@ class WorkProfileRevisionRequest(BaseModel):
                 "designationId": 1,
                 "gradeId": 1,
                 "employmentType": "Full-time",
-                "notes": "Promoted to Senior Developer"
+                "notes": "Promoted to Senior Developer",
+                "promotion": True,
+                "effective_from": "2026-02"
             }
         }
 

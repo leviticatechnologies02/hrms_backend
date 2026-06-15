@@ -1400,6 +1400,7 @@ async def get_dropdown_data(
 
 @router.get("/list")
 async def get_employees_list(
+    request: Request,
     business_id: int = Path(..., description="Business ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
@@ -1445,6 +1446,9 @@ async def get_employees_list(
             if emp.location and hasattr(emp.location, 'name'):
                 location = emp.location.name
             
+            # Use get_profile_image_url helper
+            img_url = get_profile_image_url(emp, request)
+            
             employee_list.append({
                 "id": emp.id,
                 "first_name": first_name,
@@ -1455,7 +1459,8 @@ async def get_employees_list(
                 "designation": designation,
                 "department": department,
                 "location": location,
-                "joining_date": emp.date_of_joining.isoformat() if emp.date_of_joining else None
+                "joining_date": emp.date_of_joining.isoformat() if emp.date_of_joining else None,
+                "img": img_url
             })
         
         return {

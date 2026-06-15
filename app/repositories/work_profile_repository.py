@@ -252,3 +252,137 @@ class WorkProfileRepository:
             "failed_updates": 0,
             "errors": []
         }
+
+    def get_previous_work_profile(self, employee_id: int) -> Optional[Any]:
+        """Fetch the most recent past work profile revision prior to the current state"""
+        try:
+            from app.models.employee import EmployeeWorkProfileHistory
+            from sqlalchemy.orm import joinedload
+            
+            # Fetch the most recent history entry for this employee
+            return self.db.query(EmployeeWorkProfileHistory).options(
+                joinedload(EmployeeWorkProfileHistory.business_unit),
+                joinedload(EmployeeWorkProfileHistory.department),
+                joinedload(EmployeeWorkProfileHistory.designation),
+                joinedload(EmployeeWorkProfileHistory.location),
+                joinedload(EmployeeWorkProfileHistory.cost_center),
+                joinedload(EmployeeWorkProfileHistory.grade),
+                joinedload(EmployeeWorkProfileHistory.reporting_manager),
+                joinedload(EmployeeWorkProfileHistory.hr_manager),
+                joinedload(EmployeeWorkProfileHistory.indirect_manager)
+            ).filter(
+                EmployeeWorkProfileHistory.employee_id == employee_id
+            ).order_by(
+                EmployeeWorkProfileHistory.effective_from.desc(),
+                EmployeeWorkProfileHistory.created_at.desc()
+            ).first()
+        except Exception as e:
+            import traceback
+            print(f"Error in get_previous_work_profile repository: {str(e)}")
+            traceback.print_exc()
+            return None
+
+    def create_history_entry(
+        self,
+        employee_id: int,
+        business_unit_id: Optional[int] = None,
+        department_id: Optional[int] = None,
+        designation_id: Optional[int] = None,
+        location_id: Optional[int] = None,
+        cost_center_id: Optional[int] = None,
+        grade_id: Optional[int] = None,
+        reporting_manager_id: Optional[int] = None,
+        hr_manager_id: Optional[int] = None,
+        indirect_manager_id: Optional[int] = None,
+        employment_type: Optional[str] = None,
+        employee_status: Optional[str] = None,
+        shift_policy_id: Optional[int] = None,
+        weekoff_policy_id: Optional[int] = None,
+        effective_from: Optional[Any] = None,
+        is_promotion: bool = False,
+        notes: Optional[str] = None,
+        created_by: Optional[int] = None
+    ) -> Any:
+        """Create a new work profile history record"""
+        try:
+            from app.models.employee import EmployeeWorkProfileHistory
+            from datetime import date
+            
+            # Parse effective_from date if it's a string
+            parsed_effective = effective_from
+            if isinstance(effective_from, str):
+                from datetime import datetime
+                try:
+                    parsed_effective = datetime.strptime(effective_from, "%Y-%m-%d").date()
+                except ValueError:
+                    try:
+                        parsed_effective = datetime.fromisoformat(effective_from.replace('Z', '+00:00')).date()
+                    except ValueError:
+                        parsed_effective = date.today()
+            elif not effective_from:
+                parsed_effective = date.today()
+
+            # Ensure we serialize enum to string if needed
+            status_str = employee_status
+            if hasattr(employee_status, 'value'):
+                status_str = employee_status.value
+
+            history_entry = EmployeeWorkProfileHistory(
+                employee_id=employee_id,
+                business_unit_id=business_unit_id,
+                department_id=department_id,
+                designation_id=designation_id,
+                location_id=location_id,
+                cost_center_id=cost_center_id,
+                grade_id=grade_id,
+                reporting_manager_id=reporting_manager_id,
+                hr_manager_id=hr_manager_id,
+                indirect_manager_id=indirect_manager_id,
+                employment_type=employment_type,
+                employee_status=status_str,
+                shift_policy_id=shift_policy_id,
+                weekoff_policy_id=weekoff_policy_id,
+                effective_from=parsed_effective,
+                is_promotion=is_promotion,
+                notes=notes,
+                created_by=created_by
+            )
+            self.db.add(history_entry)
+            self.db.commit()
+            self.db.refresh(history_entry)
+            return history_entry
+        except Exception as e:
+            self.db.rollback()
+            print(f"Error creating history entry: {str(e)}")
+            raise e
+
+    def create_snapshot_from_employee(
+        self, 
+        employee: Any, 
+        effective_from: Any = None, 
+        is_promotion: bool = False, 
+        notes: Optional[str] = None, 
+        created_by: Optional[int] = None
+    ) -> Any:
+        """Create a history revision from the current state of an employee"""
+        status_val = employee.employee_status.value if hasattr(employee.employee_status, 'value') else employee.employee_status
+        return self.create_history_entry(
+            employee_id=employee.id,
+            business_unit_id=employee.business_unit_id,
+            department_id=employee.department_id,
+            designation_id=employee.designation_id,
+            location_id=employee.location_id,
+            cost_center_id=employee.cost_center_id,
+            grade_id=employee.grade_id,
+            reporting_manager_id=employee.reporting_manager_id,
+            hr_manager_id=employee.hr_manager_id,
+            indirect_manager_id=employee.indirect_manager_id,
+            employment_type=employee.employment_type,
+            employee_status=status_val,
+            shift_policy_id=employee.shift_policy_id,
+            weekoff_policy_id=employee.weekoff_policy_id,
+            effective_from=effective_from or employee.date_of_joining,
+            is_promotion=is_promotion,
+            notes=notes,
+            created_by=created_by
+        )

@@ -296,3 +296,48 @@ class EmployeeSalary(Base):
     employee = relationship("Employee", back_populates="salary_records")
     salary_structure = relationship("SalaryStructure")
 
+
+class EmployeeWorkProfileHistory(Base):
+    """History of employee work profile changes"""
+    __tablename__ = "employee_work_profile_history"
+
+    id = Column(Integer, primary_key=True, index=True)
+    employee_id = Column(Integer, ForeignKey("employees.id"), nullable=False)
+    
+    # Work profile snapshot fields
+    business_unit_id = Column(Integer, ForeignKey("business_units.id"))
+    department_id = Column(Integer, ForeignKey("departments.id"))
+    designation_id = Column(Integer, ForeignKey("designations.id"))
+    location_id = Column(Integer, ForeignKey("locations.id"))
+    cost_center_id = Column(Integer, ForeignKey("cost_centers.id"))
+    grade_id = Column(Integer, ForeignKey("grades.id"))
+    reporting_manager_id = Column(Integer, ForeignKey("employees.id"))
+    hr_manager_id = Column(Integer, ForeignKey("employees.id"))
+    indirect_manager_id = Column(Integer, ForeignKey("employees.id"))
+    employment_type = Column(String(50))
+    employee_status = Column(String(50))
+    shift_policy_id = Column(Integer, ForeignKey("shift_policies.id"))
+    weekoff_policy_id = Column(Integer, ForeignKey("weekoff_policies.id"))
+    
+    # Revision meta data
+    effective_from = Column(Date)
+    is_promotion = Column(Boolean, default=False)
+    notes = Column(Text)
+    
+    # System fields
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    created_by = Column(Integer, ForeignKey("users.id"))
+
+    # Relationships
+    employee = relationship("Employee", foreign_keys=[employee_id])
+    business_unit = relationship("BusinessUnit")
+    department = relationship("Department")
+    designation = relationship("Designation")
+    location = relationship("Location")
+    cost_center = relationship("CostCenter")
+    grade = relationship("Grade")
+    reporting_manager = relationship("Employee", foreign_keys=[reporting_manager_id])
+    hr_manager = relationship("Employee", foreign_keys=[hr_manager_id])
+    indirect_manager = relationship("Employee", foreign_keys=[indirect_manager_id])
+
+

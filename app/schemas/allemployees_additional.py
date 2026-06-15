@@ -56,6 +56,8 @@ class WorkProfileRevisionRequest(BaseModel):
     businessId: Optional[int] = Field(None, description="Business ID", gt=0, example=1)
     locationId: Optional[int] = Field(None, description="Location ID", gt=0, example=1)
     costCenterId: Optional[int] = Field(None, description="Cost center ID", gt=0, example=1)
+    businessUnitId: Optional[int] = Field(None, description="Business Unit ID", gt=0, example=1)
+    businessUnit: Optional[int] = Field(None, description="Business Unit ID", gt=0, example=1)
     departmentId: Optional[int] = Field(None, description="Department ID", gt=0, example=1)
     designationId: Optional[int] = Field(None, description="Designation ID", gt=0, example=1)
     gradeId: Optional[int] = Field(None, description="Grade ID", gt=0, example=1)

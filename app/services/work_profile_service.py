@@ -134,3 +134,24 @@ class WorkProfileService:
             business_id=business_id,
             updated_by=updated_by
         )
+
+    def get_previous_work_profile(self, employee_id: int) -> Optional[Any]:
+        """Get the previous work profile revision for an employee"""
+        return self.repository.get_previous_work_profile(employee_id)
+
+    def create_snapshot_from_employee(
+        self, 
+        employee: Any, 
+        effective_from: Any = None, 
+        is_promotion: bool = False, 
+        notes: Optional[str] = None, 
+        created_by: Optional[int] = None
+    ) -> Any:
+        """Create a history revision from the current state of an employee"""
+        return self.repository.create_snapshot_from_employee(
+            employee=employee,
+            effective_from=effective_from,
+            is_promotion=is_promotion,
+            notes=notes,
+            created_by=created_by
+        )

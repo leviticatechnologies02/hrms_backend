@@ -114,6 +114,15 @@ async def lifespan(app: FastAPI):
             logger.info("✓ Auto-migration: Ensured form_submissions columns exist")
         except Exception as mig_err:
             logger.warning(f"form_submissions Auto-migration skipped or failed: {mig_err}")
+
+        # Auto-migrate: Ensure employee_work_profile_history has business_unit_id column
+        try:
+            from sqlalchemy import text as sql_text
+            with engine.begin() as conn:
+                conn.execute(sql_text("ALTER TABLE employee_work_profile_history ADD COLUMN IF NOT EXISTS business_unit_id INTEGER REFERENCES business_units(id);"))
+            logger.info("✓ Auto-migration: Ensured employee_work_profile_history.business_unit_id exists")
+        except Exception as mig_err:
+            logger.warning(f"employee_work_profile_history migration skipped or failed: {mig_err}")
             
     except Exception as e:
         logger.error(f"Error creating tables: {e}")

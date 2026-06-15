@@ -1,7 +1,7 @@
 from .base import Base, BaseModel
 from .user import User
 from .user import User
-from .employee import Employee
+from .employee import Employee, EmployeeWorkProfileHistory
 from .business import Business
 from .user_preferences import UserPreferences
 from .setup.Integrations.emailsettings import (
@@ -110,6 +110,7 @@ __all__ = [
     "User",
     "UserPreferences",
     "Employee",
+    "EmployeeWorkProfileHistory",
     "EmployeeAdditionalInfo",
     "EmployeePermissions",
     "EmployeeAccess",

@@ -3295,6 +3295,7 @@ async def get_employee_work_profile(
             joinedload(Employee.department),
             joinedload(Employee.designation),
             joinedload(Employee.location),
+            joinedload(Employee.business_unit),
             joinedload(Employee.reporting_manager).joinedload(Employee.profile),
             joinedload(Employee.reporting_manager).joinedload(Employee.designation),
         ).filter(
@@ -3348,43 +3349,108 @@ async def get_employee_work_profile(
         except:
             pass
         
-        # Build reporting manager info from eagerly loaded relationship
-        reporting_manager_info = build_manager_info(
-            employee.reporting_manager if hasattr(employee, 'reporting_manager') else None
-        )
+        business_unit_name = ""
+        try:
+            if hasattr(employee, 'business_unit') and employee.business_unit:
+                business_unit_name = employee.business_unit.name
+        except:
+            pass
         
-        # HR Manager - query separately since it's by ID field
-        hr_manager_info = {"id": None, "name": "", "img": default_img}
+        # Build managers list as a single array
+        managers = []
+        
+        # Reporting Manager
+        rm_emp = employee.reporting_manager if hasattr(employee, 'reporting_manager') else None
+        rm_info = build_manager_info(rm_emp)
+        rm_info["type"] = "Reporting Manager"
+        managers.append(rm_info)
+        
+        # HR Manager
+        hr_emp = None
         if hasattr(employee, 'hr_manager_id') and employee.hr_manager_id:
-            hr_mgr = db.query(Employee).options(
+            hr_emp = db.query(Employee).options(
                 joinedload(Employee.profile)
             ).filter(Employee.id == employee.hr_manager_id).first()
-            hr_manager_info = build_manager_info(hr_mgr)
+        hr_info = build_manager_info(hr_emp)
+        hr_info["type"] = "HR Manager"
+        managers.append(hr_info)
         
-        # Indirect Manager - query separately since it's by ID field
-        indirect_manager_info = {"id": None, "name": "", "img": default_img}
+        # Indirect Manager
+        im_emp = None
         if hasattr(employee, 'indirect_manager_id') and employee.indirect_manager_id:
-            indirect_mgr = db.query(Employee).options(
+            im_emp = db.query(Employee).options(
                 joinedload(Employee.profile)
             ).filter(Employee.id == employee.indirect_manager_id).first()
-            indirect_manager_info = build_manager_info(indirect_mgr)
+        im_info = build_manager_info(im_emp)
+        im_info["type"] = "Indirect Manager"
+        managers.append(im_info)
+        
+        # Fetch previous work profile revision using service layer
+        old_data_response = None
+        try:
+            from app.services.work_profile_service import WorkProfileService
+            work_profile_service = WorkProfileService(db)
+            prev_profile = work_profile_service.get_previous_work_profile(employee_id)
+            print(f"DEBUG GET work-profile: prev_profile for employee {employee_id} = {prev_profile}")
+            if prev_profile:
+                prev_dept = prev_profile.department.name if prev_profile.department else "General"
+                prev_desig = prev_profile.designation.name if prev_profile.designation else "Employee"
+                prev_loc = prev_profile.location.name if prev_profile.location else "Office"
+                
+                prev_managers = []
+                
+                # Reporting Manager
+                pm_rm = prev_profile.reporting_manager
+                pm_rm_info = build_manager_info(pm_rm)
+                pm_rm_info["type"] = "Reporting Manager"
+                prev_managers.append(pm_rm_info)
+                
+                # HR Manager
+                pm_hr = prev_profile.hr_manager
+                pm_hr_info = build_manager_info(pm_hr)
+                pm_hr_info["type"] = "HR Manager"
+                prev_managers.append(pm_hr_info)
+                
+                # Indirect Manager
+                pm_im = prev_profile.indirect_manager
+                pm_im_info = build_manager_info(pm_im)
+                pm_im_info["type"] = "Indirect Manager"
+                prev_managers.append(pm_im_info)
+                
+                old_data_response = {
+                    "businessUnit": prev_profile.business_unit.name if prev_profile.business_unit else "",
+                    "department": prev_dept,
+                    "designation": prev_desig,
+                    "location": prev_loc,
+                    "dateOfJoining": employee.date_of_joining.isoformat() if employee.date_of_joining else "",
+                    "employmentType": prev_profile.employment_type or "Full Time",
+                    "workingHours": "9 hours",
+                    "managers": prev_managers,
+                    "status": prev_profile.employee_status or "active",
+                    "effectiveFrom": prev_profile.effective_from.isoformat() if prev_profile.effective_from else "",
+                    "promotion": prev_profile.is_promotion or False
+                }
+        except Exception as _prev_err:
+            import traceback
+            print(f"ERROR: Failed to fetch previous work profile for employee {employee_id}: {_prev_err}")
+            traceback.print_exc()
         
         return {
             "id": employee.id,
             "name": f"{employee.first_name or ''} {employee.last_name or ''}".strip(),
+            "employeeCode": employee.employee_code or f"EMP{employee.id:03d}",
             "workProfile": {
-                "employeeCode": employee.employee_code or f"EMP{employee.id:03d}",
+                "businessUnit": business_unit_name,
                 "department": department_name,
                 "designation": designation_name,
                 "location": location_name,
                 "dateOfJoining": employee.date_of_joining.isoformat() if employee.date_of_joining else "",
                 "employmentType": "Full Time",
                 "workingHours": "9 hours",
-                "reportingManager": reporting_manager_info,
-                "hrManager": hr_manager_info,
-                "indirectManager": indirect_manager_info,
+                "managers": managers,
                 "status": employee.employee_status or "active"
-            }
+            },
+            "olddata": old_data_response
         }
     
     except HTTPException:
@@ -8176,6 +8242,63 @@ async def get_employee_work_profile_detailed(
                 
         except Exception as e:
             print(f"Warning: Error loading relationships: {str(e)}")
+            
+        # Fetch previous work profile revision using service layer
+        old_data_response = None
+        try:
+            from app.services.work_profile_service import WorkProfileService
+            work_profile_service = WorkProfileService(db)
+            prev_profile = work_profile_service.get_previous_work_profile(employee_id)
+            if prev_profile:
+                def build_hist_manager_info(mgr_employee, default_designation="Manager"):
+                    if not mgr_employee:
+                        return {"id": 0, "name": "Not Defined", "designation": "Not Defined", "profileImage": "/assets/img/users/user-01.jpg"}
+                    profile_img = "/assets/img/users/user-01.jpg"
+                    if mgr_employee.profile and mgr_employee.profile.profile_image_url:
+                        profile_img = mgr_employee.profile.profile_image_url
+                    desig_name = default_designation
+                    if mgr_employee.designation:
+                        desig_name = mgr_employee.designation.name
+                    return {
+                        "id": mgr_employee.id,
+                        "name": f"{mgr_employee.first_name} {mgr_employee.last_name}".strip(),
+                        "designation": desig_name,
+                        "profileImage": profile_img
+                    }
+                
+                prev_biz_name = "Default Business Unit"
+                if prev_profile.employee and prev_profile.employee.business:
+                    prev_biz_name = prev_profile.employee.business.business_name
+                    
+                prev_dept = prev_profile.department.name if prev_profile.department else "General"
+                prev_desig = prev_profile.designation.name if prev_profile.designation else "Employee"
+                prev_loc = prev_profile.location.name if prev_profile.location else "Office"
+                prev_cc = prev_profile.cost_center.name if prev_profile.cost_center else "General"
+                prev_grade = prev_profile.grade.name if prev_profile.grade else "Default Grade"
+                
+                old_data_response = {
+                    "businessName": prev_biz_name,
+                    "businessId": employee.business_id,
+                    "locationName": prev_loc,
+                    "locationId": prev_profile.location_id,
+                    "costCenterName": prev_cc,
+                    "costCenterId": prev_profile.cost_center_id,
+                    "departmentName": prev_dept,
+                    "departmentId": prev_profile.department_id,
+                    "gradeName": prev_grade,
+                    "gradeId": prev_profile.grade_id,
+                    "designationName": prev_desig,
+                    "designationId": prev_profile.designation_id,
+                    "reportingManager": build_hist_manager_info(prev_profile.reporting_manager, "Reporting Manager"),
+                    "hrManager": build_hist_manager_info(prev_profile.hr_manager, "HR Manager"),
+                    "indirectManager": build_hist_manager_info(prev_profile.indirect_manager, "Indirect Manager"),
+                    "effectiveFrom": prev_profile.effective_from.isoformat() if prev_profile.effective_from else "",
+                    "employeeStatus": prev_profile.employee_status or "active",
+                    "shiftPolicyId": prev_profile.shift_policy_id,
+                    "weekoffPolicyId": prev_profile.weekoff_policy_id
+                }
+        except Exception as _prev_err:
+            print(f"Warning: Failed to fetch previous work profile detailed: {_prev_err}")
         
         return {
             "success": True,
@@ -8204,7 +8327,8 @@ async def get_employee_work_profile_detailed(
                 "employeeStatus": employee.employee_status.value if employee.employee_status else "active",
                 "shiftPolicyId": employee.shift_policy_id,
                 "weekoffPolicyId": employee.weekoff_policy_id
-            }
+            },
+            "olddata": old_data_response
         }
     
     except HTTPException:
@@ -8249,6 +8373,20 @@ async def update_employee_work_profile(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Employee not found"
             )
+        
+        # Save historical revision (snapshot of current state) before updating
+        try:
+            from app.services.work_profile_service import WorkProfileService
+            work_profile_service = WorkProfileService(db)
+            work_profile_service.create_snapshot_from_employee(
+                employee=employee,
+                effective_from=date.today(),
+                is_promotion=False,
+                notes="Snapshot before update_employee_work_profile",
+                created_by=current_user.id
+            )
+        except Exception as _hist_err:
+            print(f"Warning: Failed to create work profile snapshot: {_hist_err}")
         
         # ACTIVITY LOGGING: Capture old values
         old_values = {
@@ -8797,6 +8935,20 @@ async def add_work_profile_revision(
         old_hr_manager_id = employee.hr_manager_id
         old_indirect_manager_id = employee.indirect_manager_id
         
+        # Save historical revision (snapshot of current state) before applying the new revision
+        try:
+            from app.services.work_profile_service import WorkProfileService
+            work_profile_service = WorkProfileService(db)
+            work_profile_service.create_snapshot_from_employee(
+                employee=employee,
+                effective_from=effective_date,
+                is_promotion=is_promotion,
+                notes=revision_data.notes or f"Revision for {effective_date.strftime('%B %Y')}",
+                created_by=current_user.id
+            )
+        except Exception as _hist_err:
+            print(f"Warning: Failed to create work profile snapshot in add_work_profile_revision: {_hist_err}")
+
         # Update employee work profile with new revision data
         updated_fields = []
         

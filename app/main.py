@@ -284,13 +284,13 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 # Serve static files
 upload_path = Path(settings.UPLOAD_DIR)
-if upload_path.exists():
-    app.mount("/uploads", StaticFiles(directory=str(upload_path)), name="uploads")
+upload_path.mkdir(parents=True, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=str(upload_path)), name="uploads")
 
 # Serve static files (for favicon, etc.)
 static_path = Path("app/static")
-if static_path.exists():
-    app.mount("/static", StaticFiles(directory=str(static_path)), name="static")
+static_path.mkdir(parents=True, exist_ok=True)
+app.mount("/static", StaticFiles(directory=str(static_path)), name="static")
 
 
 # Favicon route to prevent 404 errors

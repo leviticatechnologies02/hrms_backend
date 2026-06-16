@@ -1822,6 +1822,68 @@ async def review_onboarding_form(
 def sync_onboarding_submission_to_employee(db: Session, employee, submission):
     if not submission:
         return
+
+    # Sync candidate onboarding documents to EmployeeDocument
+    try:
+        from app.models.onboarding import OnboardingForm, CandidateDocument
+        from app.models.employee import EmployeeDocument
+        from urllib.parse import urlparse
+        from datetime import datetime
+        import os
+
+        form = db.query(OnboardingForm).filter(OnboardingForm.id == submission.form_id).first()
+        if form and form.form_token:
+            candidate_docs = db.query(CandidateDocument).filter(
+                CandidateDocument.business_id == employee.business_id,
+                CandidateDocument.form_token == form.form_token
+            ).all()
+
+            if candidate_docs:
+                existing_docs = db.query(EmployeeDocument).filter(
+                    EmployeeDocument.employee_id == employee.id
+                ).all()
+
+                def normalize_path(p):
+                    if not p:
+                        return ""
+                    return p.replace("\\", "/").strip("/")
+
+                existing_paths = {normalize_path(d.file_path) for d in existing_docs if d.file_path}
+
+                for doc in candidate_docs:
+                    file_url = doc.file_path or ""
+                    local_path = file_url
+                    if file_url.startswith("http://") or file_url.startswith("https://"):
+                        parsed = urlparse(file_url)
+                        local_path = parsed.path.lstrip("/")
+
+                    normalized_local = normalize_path(local_path)
+                    if normalized_local in existing_paths:
+                        continue
+
+                    filename = os.path.basename(local_path) if local_path else "document"
+                    new_doc = EmployeeDocument(
+                        employee_id=employee.id,
+                        document_type=doc.document_type or "general",
+                        document_name=doc.document_name or "Onboarding Document",
+                        file_path=local_path,
+                        original_filename=filename,
+                        file_size=0,
+                        mime_type=None,
+                        hidden=False,
+                        created_at=datetime.now(),
+                        uploaded_at=datetime.now()
+                    )
+
+                    try:
+                        if os.path.exists(local_path):
+                            new_doc.file_size = os.path.getsize(local_path)
+                    except Exception as sz_err:
+                        print(f"Warning: Could not get file size for {local_path}: {sz_err}")
+
+                    db.add(new_doc)
+    except Exception as doc_sync_err:
+        print(f"Warning: Failed to sync onboarding documents during submission sync: {doc_sync_err}")
     
     # Update Employee fields from submission
     if submission.first_name:

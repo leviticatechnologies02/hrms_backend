@@ -5380,6 +5380,75 @@ async def get_employee_documents(
                 detail=f"Employee with ID {employee_id} not found"
             )
         
+        # Sync candidate onboarding documents to EmployeeDocument first
+        try:
+            from app.models.onboarding import OnboardingForm, CandidateDocument
+            from urllib.parse import urlparse
+            from datetime import datetime
+            import os
+
+            onboarding_forms = db.query(OnboardingForm).filter(
+                OnboardingForm.employee_id == employee_id,
+                OnboardingForm.business_id == business_id
+            ).all()
+
+            for onboarding_form in onboarding_forms:
+                if onboarding_form and onboarding_form.form_token:
+                    candidate_docs = db.query(CandidateDocument).filter(
+                        CandidateDocument.business_id == business_id,
+                        CandidateDocument.form_token == onboarding_form.form_token
+                    ).all()
+
+                    if candidate_docs:
+                        existing_docs = db.query(EmployeeDocument).filter(
+                            EmployeeDocument.employee_id == employee_id
+                        ).all()
+
+                    def normalize_path(p):
+                        if not p:
+                            return ""
+                        return p.replace("\\", "/").strip("/")
+
+                    existing_paths = {normalize_path(d.file_path) for d in existing_docs if d.file_path}
+
+                    for doc in candidate_docs:
+                        file_url = doc.file_path or ""
+                        local_path = file_url
+                        if file_url.startswith("http://") or file_url.startswith("https://"):
+                            parsed = urlparse(file_url)
+                            local_path = parsed.path.lstrip("/")
+
+                        normalized_local = normalize_path(local_path)
+                        if normalized_local in existing_paths:
+                            continue
+
+                        filename = os.path.basename(local_path) if local_path else "document"
+                        new_doc = EmployeeDocument(
+                            employee_id=employee_id,
+                            document_type=doc.document_type or "general",
+                            document_name=doc.document_name or "Onboarding Document",
+                            file_path=local_path,
+                            original_filename=filename,
+                            file_size=0,
+                            mime_type=None,
+                            hidden=False,
+                            created_at=datetime.now(),
+                            uploaded_at=datetime.now()
+                        )
+
+                        try:
+                            if os.path.exists(local_path):
+                                new_doc.file_size = os.path.getsize(local_path)
+                        except Exception as sz_err:
+                            print(f"Warning: Could not get file size for {local_path}: {sz_err}")
+
+                        db.add(new_doc)
+                        existing_paths.add(normalized_local)
+                    db.commit()
+        except Exception as sync_err:
+            db.rollback()
+            print(f"Warning: Failed to sync onboarding documents to employee {employee_id}: {sync_err}")
+
         # Get all documents for this employee
         documents = db.query(EmployeeDocument).filter(
             EmployeeDocument.employee_id == employee_id

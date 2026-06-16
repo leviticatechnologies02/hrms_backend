@@ -4810,9 +4810,10 @@ async def get_employee_family(
             )
         
         # Get all family members for this employee
+        from sqlalchemy import or_
         family_members = db.query(EmployeeRelative).filter(
             EmployeeRelative.employee_id == employee_id,
-            EmployeeRelative.is_active == True
+            or_(EmployeeRelative.is_active == True, EmployeeRelative.is_active.is_(None))
         ).order_by(EmployeeRelative.created_at.desc()).all()
         
         # Format family members for frontend
@@ -4862,7 +4863,7 @@ async def get_employee_family(
         )
 
 
-@router.post("/{employee_id}/family", response_model=FamilyMemberCreateResponse)
+@router.post("/employee-family/{employee_id}", response_model=FamilyMemberCreateResponse)
 async def create_employee_family_member(
     member_data: FamilyMemberCreateRequest,
     request: Request,
@@ -4896,7 +4897,8 @@ async def create_employee_family_member(
             email=member_data.email,
             notes=member_data.notes,
             date_of_birth=member_data.date_of_birth,
-            dependent="Yes" if member_data.is_dependent else "No"
+            dependent="Yes" if member_data.is_dependent else "No",
+            is_active=True
         )
         
         db.add(new_member)
@@ -4951,7 +4953,7 @@ async def create_employee_family_member(
         )
 
 
-@router.put("/{employee_id}/family/{member_id}", response_model=FamilyMemberUpdateResponse)
+@router.put("/employee-family/{employee_id}/{member_id}", response_model=FamilyMemberUpdateResponse)
 async def update_employee_family_member(
     member_data: FamilyMemberUpdateRequest,
     request: Request,
@@ -4978,10 +4980,11 @@ async def update_employee_family_member(
             )
         
         # Find the family member
+        from sqlalchemy import or_
         member = db.query(EmployeeRelative).filter(
             EmployeeRelative.id == member_id,
             EmployeeRelative.employee_id == employee_id,
-            EmployeeRelative.is_active == True
+            or_(EmployeeRelative.is_active == True, EmployeeRelative.is_active.is_(None))
         ).first()
         
         if not member:
@@ -5065,7 +5068,7 @@ async def update_employee_family_member(
         )
 
 
-@router.delete("/{employee_id}/family/{member_id}", response_model=FamilyMemberDeleteResponse)
+@router.delete("/employee-family/{employee_id}/{member_id}", response_model=FamilyMemberDeleteResponse)
 async def delete_employee_family_member(
     request: Request,
     business_id: int = Path(..., description="Business ID"),
@@ -5090,10 +5093,11 @@ async def delete_employee_family_member(
             )
         
         # Find the family member
+        from sqlalchemy import or_
         member = db.query(EmployeeRelative).filter(
             EmployeeRelative.id == member_id,
             EmployeeRelative.employee_id == employee_id,
-            EmployeeRelative.is_active == True
+            or_(EmployeeRelative.is_active == True, EmployeeRelative.is_active.is_(None))
         ).first()
         
         if not member:
@@ -5897,7 +5901,7 @@ async def get_employee_assets(
         )
 
 
-@router.post("/{employee_id}/assets", response_model=AssetCreateResponse)
+@router.post("/employee-assets/{employee_id}", response_model=AssetCreateResponse)
 async def create_employee_asset(
     asset_data: AssetCreateRequest,
     request: Request,
@@ -6024,7 +6028,7 @@ async def create_employee_asset(
         )
 
 
-@router.put("/{employee_id}/assets/{asset_id}", response_model=AssetUpdateResponse)
+@router.put("/employee-assets/{employee_id}/{asset_id}", response_model=AssetUpdateResponse)
 async def update_employee_asset(
     asset_data: AssetUpdateRequest,
     request: Request,
@@ -6157,7 +6161,7 @@ async def update_employee_asset(
         )
 
 
-@router.delete("/{employee_id}/assets/{asset_id}", response_model=AssetDeleteResponse)
+@router.delete("/employee-assets/{employee_id}/{asset_id}", response_model=AssetDeleteResponse)
 async def delete_employee_asset(
     request: Request,
     business_id: int = Path(..., description="Business ID"),
@@ -6263,9 +6267,9 @@ async def get_employee_policies(
         
         # Get employee with basic policy relationships
         employee = db.query(Employee).options(
-            joinedload(Employee.shift_policy),
+            joinedload(Employee.shift_policy).joinedload(ShiftPolicy.default_shift),
             joinedload(Employee.weekoff_policy),
-            joinedload(Employee.overtime_policy),
+            joinedload(Employee.overtime_policy).joinedload(OvertimePolicy.rules),
             joinedload(Employee.leave_policy_assignments).joinedload(EmployeeLeavePolicy.leave_policy)
         ).filter(Employee.id == employee_id, Employee.business_id == business_id).first()
         
@@ -6299,26 +6303,70 @@ async def get_employee_policies(
             if assignment.is_active
         ]
         
+        # Determine active policies (explicit or default fallback)
+        active_shift_policy = employee.shift_policy or next((p for p in all_shift_policies if p.is_default), None)
+        active_weekoff_policy = employee.weekoff_policy or next((p for p in all_weekoff_policies if p.is_default), None)
+        active_overtime_policy = employee.overtime_policy or (all_overtime_policies[0] if all_overtime_policies else None)
+
+        # Resolve shift start, end, and break times dynamically
+        shift_start = "Not Set"
+        shift_end = "Not Set"
+        shift_break = "Not Set"
+        if active_shift_policy:
+            shift_break = "1 hour"  # Default fallback
+            if getattr(active_shift_policy, 'default_shift', None):
+                timing_str = active_shift_policy.default_shift.timing
+                if timing_str:
+                    if " - " in timing_str:
+                        parts = timing_str.split(" - ")
+                        shift_start = parts[0].strip()
+                        shift_end = parts[1].strip()
+                    else:
+                        shift_start = timing_str
+            else:
+                shift_start = "09:00 AM"
+                shift_end = "06:00 PM"
+
+        # Resolve week offs list dynamically
+        week_offs_list = []
+        if active_weekoff_policy:
+            if getattr(active_weekoff_policy, 'general_week_offs', None):
+                week_offs_list = active_weekoff_policy.general_week_offs
+            else:
+                week_offs_list = ["Saturday", "Sunday"]
+
+        # Resolve overtime rate and minimum hours dynamically
+        overtime_rate = "Not Set"
+        min_hours = 0
+        if active_overtime_policy:
+            if getattr(active_overtime_policy, 'rules', None):
+                first_rule = active_overtime_policy.rules[0]
+                overtime_rate = f"{first_rule.multiplier}x" if first_rule.multiplier else "1.5x"
+                min_hours = first_rule.from_hrs if first_rule.from_hrs is not None else 1
+            else:
+                overtime_rate = "1.5x"
+                min_hours = 1
+        
         # Build simplified response with real database data
         response = {
             "id": employee.id,
             "name": f"{employee.first_name or ''} {employee.last_name or ''}".strip(),
             "currentPolicies": {
                 "shiftPolicy": {
-                    "id": employee.shift_policy_id,
-                    "name": employee.shift_policy.title if employee.shift_policy else None,
-                    "description": employee.shift_policy.description if employee.shift_policy else None
-                },
+                    "id": active_shift_policy.id,
+                    "name": active_shift_policy.title,
+                    "description": active_shift_policy.description
+                } if active_shift_policy else None,
                 "weekOffPolicy": {
-                    "id": employee.weekoff_policy_id,
-                    "name": employee.weekoff_policy.title if employee.weekoff_policy else None,
-                    "description": employee.weekoff_policy.description if employee.weekoff_policy else None
-                },
+                    "id": active_weekoff_policy.id,
+                    "name": active_weekoff_policy.title,
+                    "description": active_weekoff_policy.description
+                } if active_weekoff_policy else None,
                 "overtimePolicy": {
-                    "id": employee.overtime_policy_id,
-                    "name": employee.overtime_policy.policy_name if employee.overtime_policy else None,
-                    "description": f"Overtime policy with {len(employee.overtime_policy.rules)} rules" if employee.overtime_policy else None
-                },
+                    "id": active_overtime_policy.id,
+                    "name": getattr(active_overtime_policy, 'policy_name', getattr(active_overtime_policy, 'title', 'Overtime Policy')),
+                    "description": f"Overtime policy with {len(active_overtime_policy.rules)} rules" if getattr(active_overtime_policy, 'rules', None) else "Overtime policy without rules"
+                } if active_overtime_policy else None,
                 "autoShiftEnabled": employee.auto_shift_enabled or False,
                 "leavePolicies": [
                     {
@@ -6327,7 +6375,7 @@ async def get_employee_policies(
                         "leaveType": assignment.leave_policy.leave_type,
                         "description": assignment.leave_policy.description,
                         "isAssigned": True
-                    } for assignment in active_leave_assignments
+                    } for assignment in active_leave_assignments if assignment.leave_policy
                 ]
             },
             "availablePolicies": {
@@ -6351,10 +6399,10 @@ async def get_employee_policies(
                     {
                         "id": policy.id,
                         "title": policy.policy_name,
-                        "description": f"Overtime policy with {len(policy.rules)} rules",
+                        "description": f"Overtime policy with {len(policy.rules)} rules" if policy.rules else "Overtime policy without rules",
                         "isDefault": False,
-                        "rateMultiplier": 1.5,  # Default value
-                        "minimumHours": 1.0,
+                        "rateMultiplier": float(policy.rules[0].multiplier) if (policy.rules and policy.rules[0].multiplier is not None) else 1.5,
+                        "minimumHours": float(policy.rules[0].from_hrs) if (policy.rules and policy.rules[0].from_hrs is not None) else 1.0,
                         "maximumHours": 12.0
                     } for policy in all_overtime_policies
                 ],
@@ -6381,28 +6429,28 @@ async def get_employee_policies(
                 },
                 "leavePolicy": {
                     "assigned": len(active_leave_assignments) > 0,
-                    "policyName": f"{len(active_leave_assignments)} Leave Policies Assigned",
-                    "assignedPolicies": [assignment.leave_policy.policy_name for assignment in active_leave_assignments],
+                    "policyName": f"{len(active_leave_assignments)} Leave Policies Assigned" if active_leave_assignments else "No Leave Policies Assigned",
+                    "assignedPolicies": [assignment.leave_policy.policy_name for assignment in active_leave_assignments if assignment.leave_policy],
                     "totalPolicies": len(all_leave_policies)
                 },
                 "shiftPolicy": {
                     "assigned": employee.shift_policy_id is not None,
-                    "policyName": employee.shift_policy.title if employee.shift_policy else "No Shift Policy Assigned",
-                    "startTime": "09:00 AM" if employee.shift_policy else "Not Set",
-                    "endTime": "06:00 PM" if employee.shift_policy else "Not Set",
-                    "breakTime": "1 hour" if employee.shift_policy else "Not Set"
+                    "policyName": active_shift_policy.title if active_shift_policy else "No Shift Policy Assigned",
+                    "startTime": shift_start,
+                    "endTime": shift_end,
+                    "breakTime": shift_break
                 },
                 "weekOffPolicy": {
                     "assigned": employee.weekoff_policy_id is not None,
-                    "policyName": employee.weekoff_policy.title if employee.weekoff_policy else "No Week Off Policy Assigned",
-                    "weekOffs": ["Saturday", "Sunday"] if employee.weekoff_policy else [],
-                    "totalWeekOffs": 2 if employee.weekoff_policy else 0
+                    "policyName": active_weekoff_policy.title if active_weekoff_policy else "No Week Off Policy Assigned",
+                    "weekOffs": week_offs_list,
+                    "totalWeekOffs": len(week_offs_list)
                 },
                 "overtimePolicy": {
                     "assigned": employee.overtime_policy_id is not None,
-                    "policyName": employee.overtime_policy.policy_name if employee.overtime_policy else "No Overtime Policy Assigned",
-                    "overtimeRate": "1.5x" if employee.overtime_policy else "Not Set",
-                    "minimumHours": 1 if employee.overtime_policy else 0
+                    "policyName": getattr(active_overtime_policy, 'policy_name', getattr(active_overtime_policy, 'title', 'Overtime Policy')) if active_overtime_policy else "No Overtime Policy Assigned",
+                    "overtimeRate": overtime_rate,
+                    "minimumHours": min_hours
                 },
                 "autoShiftPolicy": {
                     "assigned": employee.auto_shift_enabled or False,
@@ -6423,8 +6471,7 @@ async def get_employee_policies(
             detail=f"Failed to fetch employee policies: {str(e)}"
         )
 
-
-@router.put("/{employee_id}/policies")
+@router.put("/employee-policies/{employee_id}")
 async def update_employee_policies(
     policies_data: EmployeePoliciesUpdate,
     request: Request,

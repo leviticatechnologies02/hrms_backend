@@ -4136,9 +4136,10 @@ class ReportsRepository:
         employee_ids = [emp[0].id for emp in employees_data]
         
         # Get relatives for these employees
+        from sqlalchemy import or_
         relatives_query = self.db.query(EmployeeRelative).filter(
             EmployeeRelative.employee_id.in_(employee_ids),
-            EmployeeRelative.is_active == True
+            or_(EmployeeRelative.is_active == True, EmployeeRelative.is_active.is_(None))
         ).order_by(EmployeeRelative.employee_id, EmployeeRelative.relation)
         
         relatives = relatives_query.all()

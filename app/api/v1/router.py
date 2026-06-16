@@ -179,7 +179,7 @@ api_router.include_router(
 api_router.include_router(
     overtime_router,
     prefix="/{business_id}/setup/salarysetup/overtime",
-    tags=["Setup"]
+    tags=["Master Setup"]
 )
 
 # ============================================================================

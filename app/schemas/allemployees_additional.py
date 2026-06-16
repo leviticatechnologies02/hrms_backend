@@ -4,7 +4,7 @@ Pydantic models for employee API endpoints that were missing proper schemas
 """
 
 from pydantic import BaseModel, Field, field_validator
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime, date
 
 

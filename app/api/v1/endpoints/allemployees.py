@@ -2830,17 +2830,7 @@ async def update_employee_basic_info(
             "error_type": type(e).__name__
         }
         
-        print(f"📝 Update data received: {basic_info.dict()}")
-        
-        # Validate employee access with business isolation
 
-        
-        employee = validate_employee_access(db, employee_id, current_user)
-        if not employee:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Employee with ID {employee_id} not found"
-            )
         
         print(f"✅ Found employee: {employee.first_name} {employee.last_name}")
         
@@ -5769,15 +5759,7 @@ async def update_document_visibility(
                 detail="'hidden' field must be a boolean value"
             )
         
-        # Validate employee exists
-        # Validate employee access with business isolation
-
-        employee = validate_employee_access(db, employee_id, current_user)
-        if not employee:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Employee with ID {employee_id} not found"
-            )
+        # Employee already validated above via validate_employee_access with business_id
         
         # Find the document
         document = db.query(EmployeeDocument).filter(
@@ -9375,6 +9357,7 @@ async def search_managers_for_employee(
 async def update_employee_manager(
     employee_id: int,
     manager_type: str,
+    business_id: int = Path(..., description="Business ID"),
     manager_data: ManagerUpdateRequest = Body(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
@@ -9400,9 +9383,8 @@ async def update_employee_manager(
             )
         
         # Validate employee access with business isolation
-
-        
-        employee = validate_employee_access(db, employee_id, current_user)
+        validate_business_access(business_id, current_user, db)
+        employee = validate_employee_access(db, employee_id, current_user, business_id)
         if not employee:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -9415,16 +9397,10 @@ async def update_employee_manager(
         
         # Validate manager exists (if not 0/null)
         if manager_id and manager_id > 0:
-            # Get user\'s business IDs for validation
-
-            user_business_ids = get_user_business_ids(db, current_user)
-
+            # Validate manager exists within the same business
             manager = db.query(Employee).filter(
-
                 Employee.id == manager_id,
-
-                Employee.business_id.in_(user_business_ids)
-
+                Employee.business_id == business_id
             ).first()
             if not manager:
                 raise HTTPException(
@@ -9488,6 +9464,7 @@ async def update_employee_manager(
 async def remove_employee_manager(
     employee_id: int,
     manager_type: str,
+    business_id: int = Path(..., description="Business ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
@@ -9504,9 +9481,8 @@ async def remove_employee_manager(
             )
         
         # Validate employee access with business isolation
-
-        
-        employee = validate_employee_access(db, employee_id, current_user)
+        validate_business_access(business_id, current_user, db)
+        employee = validate_employee_access(db, employee_id, current_user, business_id)
         if not employee:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,

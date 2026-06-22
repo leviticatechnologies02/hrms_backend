@@ -2004,6 +2004,48 @@ def sync_onboarding_submission_to_employee(db: Session, employee, submission):
             image_url = parsed.path
         profile.profile_image_url = image_url
 
+    # Sync family members from onboarding submission to EmployeeRelative table
+    try:
+        from app.models.employee_relative import EmployeeRelative
+        from sqlalchemy import or_
+
+        existing_relatives = db.query(EmployeeRelative).filter(
+            EmployeeRelative.employee_id == employee.id
+        ).all()
+        existing_relations = {r.relation.lower() for r in existing_relatives}
+
+        family_entries = []
+        if submission.father_name and submission.father_name.strip():
+            family_entries.append({
+                "relation": "Father",
+                "name": submission.father_name.strip(),
+                "phone": getattr(submission, "father_phone", None) or "",
+                "dob": getattr(submission, "father_dob", None),
+            })
+        if submission.mother_name and submission.mother_name.strip():
+            family_entries.append({
+                "relation": "Mother",
+                "name": submission.mother_name.strip(),
+                "phone": getattr(submission, "mother_phone", None) or "",
+                "dob": getattr(submission, "mother_dob", None),
+            })
+
+        for entry in family_entries:
+            if entry["relation"].lower() not in existing_relations:
+                new_relative = EmployeeRelative(
+                    employee_id=employee.id,
+                    relation=entry["relation"],
+                    relative_name=entry["name"],
+                    phone=entry["phone"] or None,
+                    date_of_birth=entry["dob"],
+                    dependent="No",
+                    is_active=True,
+                )
+                db.add(new_relative)
+                print(f"✅ Created EmployeeRelative: {entry['relation']} - {entry['name']} for employee {employee.id}")
+    except Exception as rel_err:
+        print(f"⚠️ Warning: Failed to sync family members to EmployeeRelative: {rel_err}")
+
 
 @router.post("/{form_id}/approve", response_model=Dict[str, Any])
 async def approve_onboarding_form(

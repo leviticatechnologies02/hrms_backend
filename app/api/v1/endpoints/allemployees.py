@@ -4805,6 +4805,41 @@ async def get_employee_family(
             EmployeeRelative.employee_id == employee_id,
             or_(EmployeeRelative.is_active == True, EmployeeRelative.is_active.is_(None))
         ).order_by(EmployeeRelative.created_at.desc()).all()
+
+        # Fallback: if employee has father_name / mother_name on their record
+        # (stored during onboarding) but no EmployeeRelative rows yet, create them now.
+        existing_relations = {m.relation.lower() for m in family_members}
+        created_new = False
+
+        if employee.father_name and employee.father_name.strip() and "father" not in existing_relations:
+            new_rel = EmployeeRelative(
+                employee_id=employee_id,
+                relation="Father",
+                relative_name=employee.father_name.strip(),
+                dependent="No",
+                is_active=True,
+            )
+            db.add(new_rel)
+            created_new = True
+
+        if employee.mother_name and employee.mother_name.strip() and "mother" not in existing_relations:
+            new_rel = EmployeeRelative(
+                employee_id=employee_id,
+                relation="Mother",
+                relative_name=employee.mother_name.strip(),
+                dependent="No",
+                is_active=True,
+            )
+            db.add(new_rel)
+            created_new = True
+
+        if created_new:
+            db.commit()
+            # Re-fetch after creating the records
+            family_members = db.query(EmployeeRelative).filter(
+                EmployeeRelative.employee_id == employee_id,
+                or_(EmployeeRelative.is_active == True, EmployeeRelative.is_active.is_(None))
+            ).order_by(EmployeeRelative.created_at.desc()).all()
         
         # Format family members for frontend
         members_list = []

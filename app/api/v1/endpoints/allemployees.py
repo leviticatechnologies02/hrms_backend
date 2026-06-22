@@ -2184,49 +2184,55 @@ async def upload_employee_profile_image(
         clean_extension = file_extension.lower()
         unique_filename = f"employee_{employee_id}_{timestamp}_{unique_id}{clean_extension}"
         
-        # Ensure upload directory exists
-        upload_dir = getattr(settings, 'UPLOAD_DIR', 'uploads')
-        profile_dir = os.path.join(upload_dir, 'profile_images')
-        os.makedirs(profile_dir, exist_ok=True)
-        
-        # Save file
-        file_path = os.path.join(profile_dir, unique_filename)
-        with open(file_path, "wb") as buffer:
-            buffer.write(file_content)
-        
-        # Create relative path for database storage
+        full_image_url = ""
+
+        # ── Try Cloudinary first (persists across Render restarts) ──
+        try:
+            from app.services.cloudinary_service import upload_image, is_cloudinary_enabled
+            if is_cloudinary_enabled():
+                success, cloud_url, _ = upload_image(
+                    file_bytes=file_content,
+                    filename=unique_filename,
+                    folder="hrms/employee_profiles",
+                    public_id=f"hrms/employee_profiles/emp_{employee_id}",
+                )
+                if success and cloud_url:
+                    full_image_url = cloud_url
+                    print(f"✅ Profile photo uploaded to Cloudinary for employee {employee_id}: {cloud_url}")
+        except Exception as cloud_err:
+            print(f"⚠️ Cloudinary upload failed, falling back to local disk: {cloud_err}")
+
+        # ── Fallback: save to local disk ──
         relative_path = f"/uploads/profile_images/{unique_filename}"
-        
-        # Get or create employee profile
+        if not full_image_url:
+            upload_dir = getattr(settings, 'UPLOAD_DIR', 'uploads')
+            profile_dir = os.path.join(upload_dir, 'profile_images')
+            os.makedirs(profile_dir, exist_ok=True)
+            file_path = os.path.join(profile_dir, unique_filename)
+            with open(file_path, "wb") as buffer:
+                buffer.write(file_content)
+            # Build full URL from request base
+            base_url_str = str(request.base_url)
+            if not base_url_str.endswith("/"):
+                base_url_str += "/"
+            full_image_url = f"{base_url_str}{relative_path.lstrip('/')}"
+            print(f"📁 Profile photo saved locally for employee {employee_id}: {full_image_url}")
+
+        # ── Save URL to database ──
         employee_profile = db.query(EmployeeProfile).filter(EmployeeProfile.employee_id == employee_id).first()
         if not employee_profile:
             employee_profile = EmployeeProfile(
                 employee_id=employee_id,
-                profile_image_url=relative_path
+                profile_image_url=full_image_url
             )
             db.add(employee_profile)
         else:
-            # Remove old image file if exists
-            if employee_profile.profile_image_url:
-                try:
-                    old_file_path = os.path.join(os.getcwd(), employee_profile.profile_image_url.lstrip('/'))
-                    if os.path.exists(old_file_path):
-                        os.remove(old_file_path)
-                except Exception as e:
-                    print(f"⚠️ Warning: Could not remove old profile image: {str(e)}")
-            
-            employee_profile.profile_image_url = relative_path
+            employee_profile.profile_image_url = full_image_url
         
         db.commit()
         db.refresh(employee_profile)
         
-        # Build full URL for the uploaded image using request.base_url
-        base_url_str = str(request.base_url)
-        if not base_url_str.endswith("/"):
-            base_url_str += "/"
-        full_image_url = f"{base_url_str}{relative_path.lstrip('/')}"
-        
-        print(f"✅ Profile image uploaded for employee {employee_id}: {relative_path}")
+        print(f"✅ Profile image uploaded for employee {employee_id}: {full_image_url}")
         print(f"   Full URL: {full_image_url}")
         
         return {

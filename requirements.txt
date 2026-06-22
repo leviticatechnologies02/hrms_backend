@@ -127,3 +127,7 @@ twilio==9.0.4                     # Twilio SMS service
 # Redis: 6+
 # Operating System: Windows, Linux, macOS
 
+# ============================================================================
+# Cloud Storage
+# ============================================================================
+cloudinary==1.38.0                # Cloudinary image storage

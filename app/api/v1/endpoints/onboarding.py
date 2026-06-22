@@ -382,29 +382,48 @@ async def upload_onboarding_profile_photo(
         )
 
     try:
-        # read uploaded image bytes
+        # Read uploaded image bytes
         contents = await profile_photo.read()
 
-        # Ensure upload directory exists
-        PROFILE_PHOTO_DIR.mkdir(parents=True, exist_ok=True)
-
-        # Save the file locally
         safe_form_token = re.sub(r"[^A-Za-z0-9_.-]", "_", form_token).strip("._-") or "profile"
         stored_filename = f"photo_{safe_form_token}_{uuid4().hex}{file_extension}"
-        stored_file_path = PROFILE_PHOTO_DIR / stored_filename
-        stored_file_path_str = str(stored_file_path).replace("\\", "/")
 
-        # Format as absolute URL
-        base_url = str(request.base_url)
-        if not base_url.endswith("/"):
-            base_url += "/"
-        relative_path = stored_file_path_str.lstrip("/")
-        full_url = f"{base_url}{relative_path}"
+        full_url = ""
 
-        with open(stored_file_path, "wb") as buffer:
-            buffer.write(contents)
+        # ── Try Cloudinary first (persistent storage, survives Render restarts) ──
+        try:
+            from app.services.cloudinary_service import upload_image, is_cloudinary_enabled
+            if is_cloudinary_enabled():
+                public_id = f"hrms/profile_photos/{safe_form_token}_{uuid4().hex}"
+                success, cloud_url, _ = upload_image(
+                    file_bytes=contents,
+                    filename=stored_filename,
+                    folder="hrms/profile_photos",
+                    public_id=public_id,
+                )
+                if success and cloud_url:
+                    full_url = cloud_url
+                    logger.info(f"✅ Photo uploaded to Cloudinary: {cloud_url}")
+        except Exception as cloud_err:
+            logger.warning(f"⚠️  Cloudinary upload failed, falling back to local disk: {cloud_err}")
 
-        # Save the profile image URL to the FormSubmission record
+        # ── Fallback: save to local disk ──
+        if not full_url:
+            PROFILE_PHOTO_DIR.mkdir(parents=True, exist_ok=True)
+            stored_file_path = PROFILE_PHOTO_DIR / stored_filename
+            stored_file_path_str = str(stored_file_path).replace("\\", "/")
+
+            with open(stored_file_path, "wb") as buffer:
+                buffer.write(contents)
+
+            base_url = str(request.base_url)
+            if not base_url.endswith("/"):
+                base_url += "/"
+            relative_path = stored_file_path_str.lstrip("/")
+            full_url = f"{base_url}{relative_path}"
+            logger.info(f"📁 Photo saved to local disk: {full_url}")
+
+        # ── Persist URL to the database ──
         form = (
             db.query(OnboardingForm)
             .filter(
@@ -421,24 +440,22 @@ async def upload_onboarding_profile_photo(
                 .first()
             )
             if submission:
-                # Update the FormSubmission profile image URL
                 submission.profile_image = full_url
-            
-            # Ensure an EmployeeProfile exists and update its image URL if employee is already linked
+
+            # Update EmployeeProfile if employee already linked
             if form.employee_id:
                 from app.models.employee import EmployeeProfile
-                # Try to fetch existing profile
-                profile = db.query(EmployeeProfile).filter(EmployeeProfile.employee_id == form.employee_id).first()
+                profile = db.query(EmployeeProfile).filter(
+                    EmployeeProfile.employee_id == form.employee_id
+                ).first()
                 if profile:
                     profile.profile_image_url = full_url
                 else:
-                    # Create a new EmployeeProfile record linked to the employee
-                    new_profile = EmployeeProfile(
+                    db.add(EmployeeProfile(
                         employee_id=form.employee_id,
                         profile_image_url=full_url,
-                    )
-                    db.add(new_profile)
-            
+                    ))
+
             db.commit()
 
         return {
@@ -452,7 +469,6 @@ async def upload_onboarding_profile_photo(
 
     except Exception as exc:
         logger.exception("Failed to upload onboarding profile photo")
-
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to upload profile photo: {str(exc)}",

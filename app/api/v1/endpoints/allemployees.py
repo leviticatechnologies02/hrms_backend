@@ -3,7 +3,7 @@ All Employees API Endpoints - Production Ready
 Frontend URL: /allemployees/employees
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Body, UploadFile, File, Request, Path
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Body, Form, UploadFile, File, Request, Path
 from sqlalchemy.orm import Session
 from typing import Optional, Dict, Any, List
 from pydantic import BaseModel, validator, Field
@@ -5498,9 +5498,9 @@ async def upload_employee_document(
     business_id: int = Path(..., description="Business ID"),
     employee_id: int = Path(..., description="Employee ID"),
     file: UploadFile = File(...),
-    document_name: str = Body(...),
-    document_type: str = Body(default="general"),
-    hidden: bool = Body(default=False),
+    document_name: str = Form(...),
+    document_type: str = Form(default="general"),
+    hidden: bool = Form(default=False),
     request: Request = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin)

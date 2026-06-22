@@ -5498,7 +5498,9 @@ async def upload_employee_document(
     business_id: int = Path(..., description="Business ID"),
     employee_id: int = Path(..., description="Employee ID"),
     file: UploadFile = File(...),
-    document_name: str = Form(...),
+    document_name: Optional[str] = Form(default=None),
+    description: Optional[str] = Form(default=None),
+    name: Optional[str] = Form(default=None),
     document_type: str = Form(default="general"),
     hidden: bool = Form(default=False),
     request: Request = None,
@@ -5511,7 +5513,18 @@ async def upload_employee_document(
         import os
         import uuid
         from datetime import datetime
-        
+
+        # Resolve document name from multiple possible field names sent by frontend
+        # Accepts: document_name, description, name — falls back to filename
+        resolved_document_name = (
+            document_name
+            or description
+            or name
+            or (file.filename if file and file.filename else "document")
+        )
+        print(f"📄 Document upload - resolved name: '{resolved_document_name}' "
+              f"(document_name={document_name}, description={description}, name={name})")
+
         # Validate employee exists and belongs to the business
         validate_business_access(business_id, current_user, db)
         employee = validate_employee_access(db, employee_id, current_user, business_id)
@@ -5572,7 +5585,7 @@ async def upload_employee_document(
         new_document = EmployeeDocument(
             employee_id=employee_id,
             document_type=document_type,
-            document_name=document_name,
+            document_name=resolved_document_name,
             file_path=file_path,
             original_filename=file.filename,
             file_size=len(file_content),
@@ -5598,7 +5611,7 @@ async def upload_employee_document(
             change_tracker.log_document_upload(
                 user_id=current_user.id,
                 employee_id=employee_id,
-                document_name=document_name,
+                document_name=resolved_document_name,
                 document_type=document_type,
                 ip_address=get_client_ip(request) if request else None,
                 user_agent=get_user_agent(request) if request else None

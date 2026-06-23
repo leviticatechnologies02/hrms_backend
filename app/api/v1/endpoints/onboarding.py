@@ -439,8 +439,14 @@ async def upload_onboarding_profile_photo(
                 .order_by(FormSubmission.id.desc())
                 .first()
             )
-            if submission:
-                submission.profile_image = full_url
+            if not submission:
+                submission = FormSubmission(form_id=form.id, submitted_at=datetime.now())
+                db.add(submission)
+                db.commit()
+                db.refresh(submission)
+            
+            submission.profile_image = full_url
+            db.commit()
 
             # Update EmployeeProfile if employee already linked
             if form.employee_id:

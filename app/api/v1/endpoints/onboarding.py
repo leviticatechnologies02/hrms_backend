@@ -2254,9 +2254,10 @@ async def approve_onboarding_form(
     except IntegrityError as e:
         db.rollback()
         error_msg = str(e.orig)
-        print(f"❌ APPROVE IntegrityError: {error_msg}")
+        print(f"❌ APPROVE IntegrityError: {error_msg}", flush=True)
         traceback.print_exc()
-        detail = "Invalid data provided."
+        detail = f"Database Error: {error_msg[:250]}"
+        
         if "foreign key constraint" in error_msg.lower():
             if "shift_policy" in error_msg:
                 detail = "Invalid Shift selected. The selected shift does not exist."
@@ -2274,8 +2275,19 @@ async def approve_onboarding_form(
                 detail = "Invalid Week-off Policy selected."
             elif "reporting_manager" in error_msg:
                 detail = "Invalid Reporting Manager selected."
-            else:
-                detail = f"DB constraint error: {error_msg[:200]}"
+                
+        elif "unique constraint" in error_msg.lower() or "already exists" in error_msg.lower() or "duplicate key" in error_msg.lower():
+            if "pan_number" in error_msg.lower():
+                detail = "An employee with this PAN Number already exists."
+            elif "aadhaar" in error_msg.lower():
+                detail = "An employee with this Aadhaar Number already exists."
+            elif "email" in error_msg.lower():
+                detail = "An employee with this Email already exists."
+            elif "mobile" in error_msg.lower():
+                detail = "An employee with this Mobile Number already exists."
+            elif "employee_code" in error_msg.lower():
+                detail = "An employee with this Employee ID/Code already exists."
+
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
     except Exception as e:
         db.rollback()

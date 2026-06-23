@@ -1674,8 +1674,17 @@ async def submit_onboarding_form(
             db.commit()
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Onboarding form has expired")
         submission_payload = _build_form_submission_payload(submission_data)
-        submission = FormSubmission(form_id=form_id, **submission_payload, submitted_at=datetime.now())
-        db.add(submission)
+        
+        # Look for existing submission
+        submission = db.query(FormSubmission).filter(FormSubmission.form_id == form_id).first()
+        if submission:
+            for k, v in submission_payload.items():
+                setattr(submission, k, v)
+            submission.submitted_at = datetime.now()
+        else:
+            submission = FormSubmission(form_id=form_id, **submission_payload, submitted_at=datetime.now())
+            db.add(submission)
+            
         form.status = OnboardingStatus.SUBMITTED
         form.submitted_at = datetime.now()
         db.commit()
@@ -2091,7 +2100,7 @@ async def approve_onboarding_form(
         if form.status == OnboardingStatus.APPROVED:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Form is already approved")
 
-        submission = db.query(FormSubmission).filter(FormSubmission.form_id == form_id).first()
+        submission = db.query(FormSubmission).filter(FormSubmission.form_id == form_id).order_by(FormSubmission.id.desc()).first()
         # Extract employee_data
         employee_data = {
             "first_name": submission.first_name if submission and submission.first_name else None,

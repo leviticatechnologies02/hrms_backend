@@ -437,6 +437,10 @@ class FormSubmissionCreate(BaseModel):
     ip_address: Optional[str] = Field(None, max_length=45)
     user_agent: Optional[str] = None
 
+    class Config:
+        populate_by_name = True
+        alias_generator = lambda s: ''.join(word.title() if i else word for i, word in enumerate(s.split('_')))
+
 
 # Step-wise submission schemas for partial updates
 class StepSubmissionBase(BaseModel):

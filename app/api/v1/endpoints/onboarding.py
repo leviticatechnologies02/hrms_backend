@@ -2021,9 +2021,12 @@ def sync_onboarding_submission_to_employee(db: Session, employee, submission):
     if submission.profile_image:
         image_url = submission.profile_image
         if image_url.startswith('http'):
-            from urllib.parse import urlparse
-            parsed = urlparse(image_url)
-            image_url = parsed.path
+            if 'res.cloudinary.com' in image_url:
+                pass  # Do not truncate Cloudinary URLs
+            else:
+                from urllib.parse import urlparse
+                parsed = urlparse(image_url)
+                image_url = parsed.path
         profile.profile_image_url = image_url
 
     # Sync family members from onboarding submission to EmployeeRelative table

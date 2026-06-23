@@ -4805,16 +4805,12 @@ async def get_employee_family(
                 detail=f"Employee with ID {employee_id} not found"
             )
         
-        # Get all family members for this employee
-        from sqlalchemy import or_
-        family_members = db.query(EmployeeRelative).filter(
-            EmployeeRelative.employee_id == employee_id,
-            or_(EmployeeRelative.is_active == True, EmployeeRelative.is_active.is_(None))
-        ).order_by(EmployeeRelative.created_at.desc()).all()
-
-        # Fallback: if employee has father_name / mother_name on their record
-        # (stored during onboarding) but no EmployeeRelative rows yet, create them now.
-        existing_relations = {m.relation.lower() for m in family_members}
+        # Get all family members (including inactive) to avoid recreating deleted ones
+        all_family_members = db.query(EmployeeRelative).filter(
+            EmployeeRelative.employee_id == employee_id
+        ).all()
+        
+        existing_relations = {m.relation.lower() for m in all_family_members}
         created_new = False
 
         if employee.father_name and employee.father_name.strip() and "father" not in existing_relations:
@@ -4841,11 +4837,13 @@ async def get_employee_family(
 
         if created_new:
             db.commit()
-            # Re-fetch after creating the records
-            family_members = db.query(EmployeeRelative).filter(
-                EmployeeRelative.employee_id == employee_id,
-                or_(EmployeeRelative.is_active == True, EmployeeRelative.is_active.is_(None))
-            ).order_by(EmployeeRelative.created_at.desc()).all()
+
+        # Query active family members for the response
+        from sqlalchemy import or_
+        family_members = db.query(EmployeeRelative).filter(
+            EmployeeRelative.employee_id == employee_id,
+            or_(EmployeeRelative.is_active == True, EmployeeRelative.is_active.is_(None))
+        ).order_by(EmployeeRelative.created_at.desc()).all()
         
         # Format family members for frontend
         members_list = []

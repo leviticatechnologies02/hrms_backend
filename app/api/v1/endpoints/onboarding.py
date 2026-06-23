@@ -2108,18 +2108,40 @@ async def approve_onboarding_form(
         
         # Apply payload data if available
         if approve_data:
+            from app.models.shift_policy import ShiftPolicy
+            from app.models.weekoff_policy import WeekOffPolicy
+            from app.models.grades import Grade
+            from app.models.department import Department
+            from app.models.designations import Designation
+            from app.models.location import Location
+            from app.models.cost_center import CostCenter
+
+            def safe_fk_id(model, field_val, extra_filter=None):
+                """Return the int ID only if the record exists in DB, else None."""
+                if not field_val or not str(field_val).isdigit():
+                    return None
+                fk_id = int(field_val)
+                q = db.query(model).filter(model.id == fk_id)
+                if extra_filter is not None:
+                    q = q.filter(extra_filter)
+                exists = q.first()
+                if not exists:
+                    print(f"⚠️ FK validation: {model.__name__} id={fk_id} not found — skipping")
+                    return None
+                return fk_id
+
             employee_updates = {
                 "date_of_joining": approve_data.joining_date,
                 "date_of_confirmation": approve_data.confirmation_date,
                 "business_unit_id": int(approve_data.business_unit) if approve_data.business_unit and str(approve_data.business_unit).isdigit() else None,
-                "location_id": int(approve_data.location) if approve_data.location and str(approve_data.location).isdigit() else None,
-                "cost_center_id": int(approve_data.cost_center) if approve_data.cost_center and str(approve_data.cost_center).isdigit() else None,
-                "department_id": int(approve_data.department) if approve_data.department and str(approve_data.department).isdigit() else None,
-                "designation_id": int(approve_data.designation) if approve_data.designation and str(approve_data.designation).isdigit() else None,
+                "location_id": safe_fk_id(Location, approve_data.location),
+                "cost_center_id": safe_fk_id(CostCenter, approve_data.cost_center),
+                "department_id": safe_fk_id(Department, approve_data.department),
+                "designation_id": safe_fk_id(Designation, approve_data.designation),
                 "reporting_manager_id": int(approve_data.reporting_manager) if approve_data.reporting_manager and str(approve_data.reporting_manager).isdigit() else None,
-                "shift_policy_id": int(approve_data.shift) if approve_data.shift and str(approve_data.shift).isdigit() else None,
-                "grade_id": int(approve_data.grade) if approve_data.grade and str(approve_data.grade).isdigit() else None,
-                "weekoff_policy_id": int(approve_data.week_off) if approve_data.week_off and str(approve_data.week_off).isdigit() else None,
+                "shift_policy_id": safe_fk_id(ShiftPolicy, approve_data.shift),
+                "grade_id": safe_fk_id(Grade, approve_data.grade),
+                "weekoff_policy_id": safe_fk_id(WeekOffPolicy, approve_data.week_off),
                 "employment_type": approve_data.employment_type,
                 "work_mode": approve_data.work_mode,
             }

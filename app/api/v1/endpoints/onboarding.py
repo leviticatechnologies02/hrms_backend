@@ -2082,6 +2082,7 @@ async def approve_onboarding_form(
     print("DEBUG PARSED PAYLOAD: ", approve_data)
     validate_business_access(business_id, current_user, db)
     try:
+        import traceback
         from app.models.employee import Employee
         form = validate_form_access(db, form_id, business_id, current_user)
         if form.status == OnboardingStatus.APPROVED:
@@ -2130,15 +2131,18 @@ async def approve_onboarding_form(
                     return None
                 return fk_id
 
+            from app.models.business_unit import BusinessUnit
+            from app.models.employee import Employee as EmployeeModel
+
             employee_updates = {
                 "date_of_joining": approve_data.joining_date,
                 "date_of_confirmation": approve_data.confirmation_date,
-                "business_unit_id": int(approve_data.business_unit) if approve_data.business_unit and str(approve_data.business_unit).isdigit() else None,
+                "business_unit_id": safe_fk_id(BusinessUnit, approve_data.business_unit),
                 "location_id": safe_fk_id(Location, approve_data.location),
                 "cost_center_id": safe_fk_id(CostCenter, approve_data.cost_center),
                 "department_id": safe_fk_id(Department, approve_data.department),
                 "designation_id": safe_fk_id(Designation, approve_data.designation),
-                "reporting_manager_id": int(approve_data.reporting_manager) if approve_data.reporting_manager and str(approve_data.reporting_manager).isdigit() else None,
+                "reporting_manager_id": safe_fk_id(EmployeeModel, approve_data.reporting_manager),
                 "shift_policy_id": safe_fk_id(ShiftPolicy, approve_data.shift),
                 "grade_id": safe_fk_id(Grade, approve_data.grade),
                 "weekoff_policy_id": safe_fk_id(WeekOffPolicy, approve_data.week_off),
@@ -2147,6 +2151,7 @@ async def approve_onboarding_form(
             }
             # Remove None values so we don't overwrite with nulls unnecessarily
             employee_updates = {k: v for k, v in employee_updates.items() if v is not None}
+            print(f"DEBUG employee_updates after FK validation: {employee_updates}")
         else:
             employee_updates = {}
 
@@ -2249,6 +2254,8 @@ async def approve_onboarding_form(
     except IntegrityError as e:
         db.rollback()
         error_msg = str(e.orig)
+        print(f"❌ APPROVE IntegrityError: {error_msg}")
+        traceback.print_exc()
         detail = "Invalid data provided."
         if "foreign key constraint" in error_msg.lower():
             if "shift_policy" in error_msg:
@@ -2268,10 +2275,12 @@ async def approve_onboarding_form(
             elif "reporting_manager" in error_msg:
                 detail = "Invalid Reporting Manager selected."
             else:
-                detail = "One of the selected options is invalid and does not exist in the database."
+                detail = f"DB constraint error: {error_msg[:200]}"
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
     except Exception as e:
         db.rollback()
+        print(f"❌ APPROVE Exception: {type(e).__name__}: {e}")
+        traceback.print_exc()
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 

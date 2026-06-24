@@ -1430,7 +1430,10 @@ async def list_onboarding_forms(
 ):
     validate_business_access(business_id, current_user, db)
     try:
-        query = db.query(OnboardingForm).filter(OnboardingForm.business_id == business_id)
+        query = db.query(OnboardingForm).filter(
+            OnboardingForm.business_id == business_id,
+            OnboardingForm.is_active == True
+        )
         if form_status and form_status.lower() not in ['all', '']:
             query = query.filter(OnboardingForm.status == form_status)
         if search and search.strip():
@@ -1442,7 +1445,7 @@ async def list_onboarding_forms(
             )
         total = query.count()
         offset = (page - 1) * limit
-        forms = query.offset(offset).limit(limit).all()
+        forms = query.order_by(OnboardingForm.id.desc()).offset(offset).limit(limit).all()
         return {"items": forms, "total": total, "page": page, "limit": limit}
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
@@ -2687,6 +2690,42 @@ async def submit_candidate_form_step(form_token: str, step_number: int, step_dat
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+# ---------------------------------------------------------------------------
+# Repair: restore accidentally deactivated onboarding forms
+# ---------------------------------------------------------------------------
+@router.post("/repair/restore-form/{form_id}", response_model=dict)
+async def repair_restore_form(
+    business_id: int = Path(...),
+    form_id: int = Path(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_admin),
+):
+    """
+    Restore an onboarding form that was accidentally soft-deleted (is_active=False).
+    Only sets is_active back to True without changing any other fields.
+    """
+    validate_business_access(business_id, current_user, db)
+    form = db.query(OnboardingForm).filter(
+        OnboardingForm.id == form_id,
+        OnboardingForm.business_id == business_id,
+    ).first()
+    if not form:
+        raise HTTPException(status_code=404, detail=f"Onboarding form {form_id} not found for this business")
+    if form.is_active:
+        return {"success": True, "message": f"Form {form_id} is already active", "form_id": form_id, "status": form.status}
+    form.is_active = True
+    form.updated_at = datetime.now()
+    db.commit()
+    db.refresh(form)
+    return {
+        "success": True,
+        "message": f"Form {form_id} restored successfully",
+        "form_id": form_id,
+        "status": form.status,
+        "candidate_name": form.candidate_name,
+    }
 
 
 # ---------------------------------------------------------------------------

@@ -778,7 +778,6 @@ async def get_employee_summary(
         if not profile_image_url:
             try:
                 from app.models.onboarding import OnboardingForm, FormSubmission, OnboardingStatus as OBStatus
-                from urllib.parse import urlparse
                 ob_row = (
                     db.query(FormSubmission.profile_image)
                     .join(OnboardingForm, OnboardingForm.id == FormSubmission.form_id)
@@ -790,24 +789,33 @@ async def get_employee_summary(
                     .first()
                 )
                 if ob_row and ob_row.profile_image:
-                    raw = ob_row.profile_image
-                    if raw.startswith("http"):
-                        raw = urlparse(raw).path
-                    profile_image_url = raw
+                    # Keep the full URL as-is — do NOT strip Cloudinary URLs
+                    profile_image_url = ob_row.profile_image
             except Exception as _e:
                 print(f"⚠️ Warning: onboarding photo fallback failed: {_e}")
         
         # Determine base URL dynamically
         base_url_to_use = str(request.base_url).rstrip('/')
         
+        def _build_img_url(raw_url: str) -> str:
+            """Return a valid absolute URL for an image.
+            - Full http/https URLs (including Cloudinary) are returned as-is.
+            - Cloudinary-style relative paths (starting with 'dk0aoacfw/' or similar
+              bucket names) are reconstructed to a full Cloudinary URL.
+            - Other relative paths are appended to the backend base URL.
+            """
+            if not raw_url:
+                return f"{base_url_to_use}/assets/img/users/user-01.jpg"
+            if raw_url.startswith('http'):
+                return raw_url
+            # Detect Cloudinary relative path stored without the host prefix
+            stripped = raw_url.lstrip('/')
+            if stripped.startswith('dk0aoacfw/') or 'res.cloudinary.com' in stripped:
+                return f"https://res.cloudinary.com/{stripped}"
+            return f"{base_url_to_use}/{stripped}"
+        
         # Build full URL for profile image
-        if profile_image_url:
-            if profile_image_url.startswith('http'):
-                full_profile_image_url = profile_image_url
-            else:
-                full_profile_image_url = f"{base_url_to_use}/{profile_image_url.lstrip('/')}"
-        else:
-            full_profile_image_url = f"{base_url_to_use}/assets/img/users/user-01.jpg"
+        full_profile_image_url = _build_img_url(profile_image_url) if profile_image_url else f"{base_url_to_use}/assets/img/users/user-01.jpg"
         
         print(f"🖼️ Profile image URL: {full_profile_image_url}")
         print(f"   BASE_URL used: {base_url_to_use}")
@@ -853,20 +861,10 @@ async def get_employee_summary(
                     # Get manager's profile image
                     manager_profile = db.query(EmployeeProfile).filter(EmployeeProfile.employee_id == reporting_manager.id).first()
                     manager_img = manager_profile.profile_image_url if manager_profile and manager_profile.profile_image_url else None
-                    
-                    # Build full URL for manager image
-                    if manager_img:
-                        if manager_img.startswith('http'):
-                            manager_img_url = manager_img
-                        else:
-                            manager_img_url = f"{base_url_to_use}/{manager_img.lstrip('/')}"
-                    else:
-                        manager_img_url = f"{base_url_to_use}/assets/img/users/user-01.jpg"
-                    
                     managers["reportingManager"] = {
                         "name": f"{reporting_manager.first_name or ''} {reporting_manager.last_name or ''}".strip(),
                         "code": reporting_manager.employee_code or f"EMP{reporting_manager.id:03d}",
-                        "img": manager_img_url
+                        "img": _build_img_url(manager_img)
                     }
             except Exception as e:
                 print(f"Warning: Error getting reporting manager: {e}")
@@ -881,20 +879,10 @@ async def get_employee_summary(
                 if hr_manager:
                     hr_profile = db.query(EmployeeProfile).filter(EmployeeProfile.employee_id == hr_manager.id).first()
                     hr_img = hr_profile.profile_image_url if hr_profile and hr_profile.profile_image_url else None
-                    
-                    # Build full URL for HR manager image
-                    if hr_img:
-                        if hr_img.startswith('http'):
-                            hr_img_url = hr_img
-                        else:
-                            hr_img_url = f"{base_url_to_use}/{hr_img.lstrip('/')}"
-                    else:
-                        hr_img_url = f"{base_url_to_use}/assets/img/users/user-01.jpg"
-                    
                     managers["hrManager"] = {
                         "name": f"{hr_manager.first_name or ''} {hr_manager.last_name or ''}".strip(),
                         "code": hr_manager.employee_code or f"EMP{hr_manager.id:03d}",
-                        "img": hr_img_url
+                        "img": _build_img_url(hr_img)
                     }
             except Exception as e:
                 print(f"Warning: Error getting HR manager: {e}")
@@ -909,20 +897,10 @@ async def get_employee_summary(
                 if indirect_manager:
                     indirect_profile = db.query(EmployeeProfile).filter(EmployeeProfile.employee_id == indirect_manager.id).first()
                     indirect_img = indirect_profile.profile_image_url if indirect_profile and indirect_profile.profile_image_url else None
-                    
-                    # Build full URL for indirect manager image
-                    if indirect_img:
-                        if indirect_img.startswith('http'):
-                            indirect_img_url = indirect_img
-                        else:
-                            indirect_img_url = f"{base_url_to_use}/{indirect_img.lstrip('/')}"
-                    else:
-                        indirect_img_url = f"{base_url_to_use}/assets/img/users/user-01.jpg"
-                    
                     managers["indirectManager"] = {
                         "name": f"{indirect_manager.first_name or ''} {indirect_manager.last_name or ''}".strip(),
                         "code": indirect_manager.employee_code or f"EMP{indirect_manager.id:03d}",
-                        "img": indirect_img_url
+                        "img": _build_img_url(indirect_img)
                     }
             except Exception as e:
                 print(f"Warning: Error getting indirect manager: {e}")
@@ -937,21 +915,11 @@ async def get_employee_summary(
             for report in reports:
                 report_profile = db.query(EmployeeProfile).filter(EmployeeProfile.employee_id == report.id).first()
                 report_img = report_profile.profile_image_url if report_profile and report_profile.profile_image_url else None
-                
-                # Build full URL for report image
-                if report_img:
-                    if report_img.startswith('http'):
-                        report_img_url = report_img
-                    else:
-                        report_img_url = f"{base_url_to_use}/{report_img.lstrip('/')}"
-                else:
-                    report_img_url = f"{base_url_to_use}/assets/img/users/user-01.jpg"
-                
                 direct_reports.append({
                     "id": report.id,
                     "name": f"{report.first_name or ''} {report.last_name or ''}".strip(),
                     "code": report.employee_code or f"EMP{report.id:03d}",
-                    "img": report_img_url
+                    "img": _build_img_url(report_img)
                 })
         except Exception as e:
             print(f"Warning: Error getting direct reports: {e}")

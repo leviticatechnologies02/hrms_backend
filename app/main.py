@@ -68,6 +68,9 @@ async def lifespan(app: FastAPI):
                 # Add employment_type and work_mode to employees
                 conn.execute(text("ALTER TABLE employees ADD COLUMN IF NOT EXISTS employment_type VARCHAR(50);"))
                 conn.execute(text("ALTER TABLE employees ADD COLUMN IF NOT EXISTS work_mode VARCHAR(50);"))
+                
+                # Add face_image_url to employee_profiles
+                conn.execute(text("ALTER TABLE employee_profiles ADD COLUMN IF NOT EXISTS face_image_url VARCHAR(500);"))
             logger.info("✓ Auto-migration: Ensured columns exist in database")
         except Exception as mig_err:
             logger.warning(f"Auto-migration skipped or failed: {mig_err}")

@@ -210,6 +210,7 @@ class EmployeeProfile(Base):
     
     # Additional Information
     profile_image_url = Column(String(500))
+    face_image_url = Column(String(500), nullable=True)
     bio = Column(Text)
     skills = Column(Text)  # JSON string
     certifications = Column(Text)  # JSON string

@@ -178,6 +178,7 @@ class EmployeeBasicInfoUpdate(BaseModel):
     motherName: Optional[str] = None
     noticePeriod: Optional[str] = None
     dateOfMarriage: Optional[str] = None
+    faceImageUrl: Optional[str] = None
     
     def has_valid_data(self) -> bool:
         """Check if at least one field has a non-None value"""
@@ -797,15 +798,15 @@ async def get_employee_summary(
         # Determine base URL dynamically
         base_url_to_use = str(request.base_url).rstrip('/')
         
-        def _build_img_url(raw_url: str) -> str:
-            """Return a valid absolute URL for an image.
+        def _build_img_url(raw_url: str):
+            """Return a valid absolute URL for an image, or None if not available.
             - Full http/https URLs (including Cloudinary) are returned as-is.
-            - Cloudinary-style relative paths (starting with 'dk0aoacfw/' or similar
-              bucket names) are reconstructed to a full Cloudinary URL.
+            - Cloudinary-style relative paths are reconstructed to a full Cloudinary URL.
             - Other relative paths are appended to the backend base URL.
+            - Returns None if raw_url is empty/None.
             """
             if not raw_url:
-                return f"{base_url_to_use}/assets/img/users/user-01.jpg"
+                return None
             if raw_url.startswith('http'):
                 return raw_url
             # Detect Cloudinary relative path stored without the host prefix
@@ -834,19 +835,17 @@ async def get_employee_summary(
             "reportingManager": {
                 "name": "Not Defined",
                 "code": "",
-                "img": f"{base_url_to_use}/assets/img/users/user-01.jpg"
+                "img": None
             },
             "hrManager": {
                 "name": "Not Defined",
                 "code": "",
-                "img": f"{base_url_to_use}/assets/img/users/user-01.jpg"
+                "img": None
             },
-
-            # Additional logging or handling can be added here
             "indirectManager": {
                 "name": "Not Defined",
                 "code": "",
-                "img": f"{base_url_to_use}/assets/img/users/user-01.jpg"
+                "img": None
             }
         }
         
@@ -858,9 +857,22 @@ async def get_employee_summary(
                     Employee.business_id == business_id
                 ).first()
                 if reporting_manager:
-                    # Get manager's profile image
+                    # Get manager's profile image from profile table
                     manager_profile = db.query(EmployeeProfile).filter(EmployeeProfile.employee_id == reporting_manager.id).first()
                     manager_img = manager_profile.profile_image_url if manager_profile and manager_profile.profile_image_url else None
+                    # Fallback: check onboarding photo
+                    if not manager_img:
+                        try:
+                            from app.models.onboarding import OnboardingForm, FormSubmission, OnboardingStatus as OBStatus
+                            ob = db.query(FormSubmission.profile_image).join(OnboardingForm, OnboardingForm.id == FormSubmission.form_id).filter(
+                                OnboardingForm.employee_id == reporting_manager.id,
+                                OnboardingForm.status == OBStatus.APPROVED,
+                                FormSubmission.profile_image.isnot(None)
+                            ).first()
+                            if ob and ob.profile_image:
+                                manager_img = ob.profile_image
+                        except Exception:
+                            pass
                     managers["reportingManager"] = {
                         "name": f"{reporting_manager.first_name or ''} {reporting_manager.last_name or ''}".strip(),
                         "code": reporting_manager.employee_code or f"EMP{reporting_manager.id:03d}",
@@ -879,6 +891,19 @@ async def get_employee_summary(
                 if hr_manager:
                     hr_profile = db.query(EmployeeProfile).filter(EmployeeProfile.employee_id == hr_manager.id).first()
                     hr_img = hr_profile.profile_image_url if hr_profile and hr_profile.profile_image_url else None
+                    # Fallback: check onboarding photo
+                    if not hr_img:
+                        try:
+                            from app.models.onboarding import OnboardingForm, FormSubmission, OnboardingStatus as OBStatus
+                            ob = db.query(FormSubmission.profile_image).join(OnboardingForm, OnboardingForm.id == FormSubmission.form_id).filter(
+                                OnboardingForm.employee_id == hr_manager.id,
+                                OnboardingForm.status == OBStatus.APPROVED,
+                                FormSubmission.profile_image.isnot(None)
+                            ).first()
+                            if ob and ob.profile_image:
+                                hr_img = ob.profile_image
+                        except Exception:
+                            pass
                     managers["hrManager"] = {
                         "name": f"{hr_manager.first_name or ''} {hr_manager.last_name or ''}".strip(),
                         "code": hr_manager.employee_code or f"EMP{hr_manager.id:03d}",
@@ -897,6 +922,19 @@ async def get_employee_summary(
                 if indirect_manager:
                     indirect_profile = db.query(EmployeeProfile).filter(EmployeeProfile.employee_id == indirect_manager.id).first()
                     indirect_img = indirect_profile.profile_image_url if indirect_profile and indirect_profile.profile_image_url else None
+                    # Fallback: check onboarding photo
+                    if not indirect_img:
+                        try:
+                            from app.models.onboarding import OnboardingForm, FormSubmission, OnboardingStatus as OBStatus
+                            ob = db.query(FormSubmission.profile_image).join(OnboardingForm, OnboardingForm.id == FormSubmission.form_id).filter(
+                                OnboardingForm.employee_id == indirect_manager.id,
+                                OnboardingForm.status == OBStatus.APPROVED,
+                                FormSubmission.profile_image.isnot(None)
+                            ).first()
+                            if ob and ob.profile_image:
+                                indirect_img = ob.profile_image
+                        except Exception:
+                            pass
                     managers["indirectManager"] = {
                         "name": f"{indirect_manager.first_name or ''} {indirect_manager.last_name or ''}".strip(),
                         "code": indirect_manager.employee_code or f"EMP{indirect_manager.id:03d}",
@@ -1148,6 +1186,23 @@ async def get_employee_basic_info(
                 print(f"⚠️ Error converting date to ISO: {e}")
                 return ""
         
+        # Determine base URL dynamically
+        base_url_to_use = str(request.base_url).rstrip('/')
+        
+        def _build_img_url(raw_url: str) -> str:
+            if not raw_url:
+                return ""
+            if raw_url.startswith('http'):
+                return raw_url
+            stripped = raw_url.lstrip('/')
+            if stripped.startswith('dk0aoacfw/') or 'res.cloudinary.com' in stripped:
+                return f"https://res.cloudinary.com/{stripped}"
+            return f"{base_url_to_use}/{stripped}"
+            
+        face_url = ""
+        if employee_profile and employee_profile.face_image_url:
+            face_url = _build_img_url(employee_profile.face_image_url)
+        
         # Build comprehensive basic info using SAME LOGIC as summary endpoint
         basic_info = {
             # Name fields - from employees table (CONSISTENT with summary)
@@ -1278,6 +1333,10 @@ async def get_employee_basic_info(
             "code": employee.employee_code or f"EMP{employee.id:03d}",
             "img": profile_image_url,
             "business_id": employee.business_id,
+            # Face registration fields (multiple aliases for frontend compatibility)
+            "faceImageUrl": face_url,
+            "registeredFaceUrl": face_url,
+            "faceRegistered": bool(face_url),
             "basicInfo": basic_info
         }
         
@@ -2699,6 +2758,11 @@ async def update_employee_basic_info(
                     addr_val = addr_val[:255]  # Truncate to fit database
                 profile.permanent_address_line1 = addr_val
                 updates_made.append("permanentAddress_profile")
+            
+            # Face image URL
+            if basic_info.faceImageUrl is not None:
+                profile.face_image_url = basic_info.faceImageUrl.strip() if basic_info.faceImageUrl else None
+                updates_made.append("faceImageUrl")
                 
         except Exception as e:
             print(f"⚠️ Profile update error: {e}")

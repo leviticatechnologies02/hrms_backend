@@ -22,7 +22,13 @@ engine = create_engine(
     max_overflow=settings.DB_MAX_OVERFLOW,
     pool_timeout=settings.DB_POOL_TIMEOUT,
     pool_pre_ping=True,  # Verify connections before using
-    pool_recycle=settings.DB_POOL_RECYCLE,
+    pool_recycle=300,    # Recycle connections every 5 minutes to prevent unexpected drops
+    connect_args={
+        "keepalives": 1,
+        "keepalives_idle": 30,
+        "keepalives_interval": 10,
+        "keepalives_count": 5
+    },
     echo=settings.DB_ECHO,
     future=True
 )

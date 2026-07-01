@@ -5,7 +5,7 @@ Handles PostgreSQL connections using SQLAlchemy
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, Session
-from sqlalchemy.pool import QueuePool
+from sqlalchemy.pool import NullPool
 from contextlib import contextmanager
 import logging
 
@@ -14,38 +14,28 @@ from .config import settings
 logger = logging.getLogger(__name__)
 
 
-def _build_connect_args() -> dict:
+def _get_database_url() -> str:
     """
-    Build connect_args for psycopg2.
-
-    Render internal PostgreSQL URLs (hostname ending in '-a.') do NOT support
-    SSL, while external URLs do.  Using sslmode=prefer lets psycopg2 try SSL
-    first and fall back to plaintext – works for both internal and external.
+    Get the database URL, ensuring sslmode=require is in the URL itself
+    (Render PostgreSQL requires SSL for both internal and external connections).
     """
-    # Detect Render internal hostname (e.g. dpg-xxx-a.oregon-postgres.render.com)
-    db_url = settings.database_url or ""
-    is_render_internal = "-a." in db_url and "render.com" in db_url
-
-    return {
-        "keepalives": 1,
-        "keepalives_idle": 30,
-        "keepalives_interval": 10,
-        "keepalives_count": 5,
-        "sslmode": "disable" if is_render_internal else "prefer",
-        "connect_timeout": 10,
-    }
+    url = settings.database_url
+    # Append sslmode=require to the URL if not already present
+    if "sslmode" not in url:
+        separator = "&" if "?" in url else "?"
+        url = f"{url}{separator}sslmode=require"
+    return url
 
 
-# Create database engine with QueuePool (prevents connection exhaustion on Render free tier)
+# Create database engine with NullPool
+# NullPool creates a fresh connection per request and closes it immediately after.
+# This avoids stale/pooled connection issues on Render's managed PostgreSQL proxy.
 engine = create_engine(
-    settings.database_url,
-    poolclass=QueuePool,
-    pool_size=5,           # Keep 5 persistent connections
-    max_overflow=2,        # Allow up to 2 extra connections under burst
-    pool_timeout=30,       # Wait up to 30s for a free connection
-    pool_recycle=1800,     # Recycle connections every 30 min (avoids stale connections)
-    pool_pre_ping=True,    # Test connection before using from pool (handles Render restarts)
-    connect_args=_build_connect_args(),
+    _get_database_url(),
+    poolclass=NullPool,
+    connect_args={
+        "connect_timeout": 30,     # Allow 30s for cold-start connections on Render free tier
+    },
     echo=settings.DB_ECHO,
     future=True,
 )

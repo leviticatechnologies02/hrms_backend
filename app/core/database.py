@@ -18,17 +18,20 @@ def _build_connect_args() -> dict:
     """
     Build connect_args for psycopg2.
 
-    On Render, DATABASE_URL already points to Render's managed PostgreSQL which
-    requires SSL. When building from individual components we also require SSL.
-    We only add keepalive + SSL args for direct psycopg2 connections; asyncpg
-    (if ever used) has its own SSL handling.
+    Render internal PostgreSQL URLs (hostname ending in '-a.') do NOT support
+    SSL, while external URLs do.  Using sslmode=prefer lets psycopg2 try SSL
+    first and fall back to plaintext – works for both internal and external.
     """
+    # Detect Render internal hostname (e.g. dpg-xxx-a.oregon-postgres.render.com)
+    db_url = settings.database_url or ""
+    is_render_internal = "-a." in db_url and "render.com" in db_url
+
     return {
         "keepalives": 1,
         "keepalives_idle": 30,
         "keepalives_interval": 10,
         "keepalives_count": 5,
-        "sslmode": "require",
+        "sslmode": "disable" if is_render_internal else "prefer",
         "connect_timeout": 10,
     }
 

@@ -17,11 +17,6 @@ load_dotenv()
 # If you already have settings class, integrate these into it.
 BASE_URL = os.getenv("BACKEND_BASE_URL", "http://127.0.0.1:8000")
 
-# Local upload folder (Option A)
-UPLOAD_FOLDER = os.path.join("app", "uploads", "business_units")
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-
-
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
@@ -36,25 +31,25 @@ class Settings(BaseSettings):
     # Application metadata
     APP_NAME: str = "Levitica HR Management API"
     APP_VERSION: str = "1.0.0"
-    DEBUG: bool = True
+    DEBUG: bool = False  # Always False by default; override via env var DEBUG=True locally
     
     # Database configuration (PostgreSQL)
     DB_HOST: str = "localhost"
     DB_PORT: int = 5432
     DB_USER: str = "postgres"
-    DB_PASSWORD: str = os.getenv("DB_PASSWORD")
+    DB_PASSWORD: Optional[str] = None   # Set via DB_PASSWORD env var or use DATABASE_URL
     DB_NAME: str = "levitica_hr"
-    DATABASE_URL: Optional[str] = None
+    DATABASE_URL: Optional[str] = None  # Full URL takes priority (set on Render)
     
     # Database connection pooling
     DB_POOL_SIZE: int = 5
-    DB_MAX_OVERFLOW: int = 10
+    DB_MAX_OVERFLOW: int = 2   # Conservative for Render free-tier
     DB_POOL_TIMEOUT: int = 30
     DB_POOL_RECYCLE: int = 1800
     DB_ECHO: bool = False
     
     # Security settings
-    SECRET_KEY: str = os.getenv("SECRET_KEY")
+    SECRET_KEY: Optional[str] = None   # Must be set via env var on Render
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
     
@@ -63,7 +58,7 @@ class Settings(BaseSettings):
     REDIS_PORT: int = 16358
     REDIS_DB: int = 0
     REDIS_USERNAME: str = "default"
-    REDIS_PASSWORD: str = os.getenv("REDIS_PASSWORD")
+    REDIS_PASSWORD: Optional[str] = None   # Set via REDIS_PASSWORD env var on Render
     REDIS_DECODE_RESPONSES: bool = True
     REDIS_SSL: bool = True  # Redis Cloud requires SSL
     
@@ -163,9 +158,16 @@ class Settings(BaseSettings):
     
     @property
     def database_url(self) -> str:
+        """Build the database URL. DATABASE_URL env var (Render Postgres) takes priority."""
         if self.DATABASE_URL:
-            return self.DATABASE_URL
-        encoded_password = quote_plus(self.DB_PASSWORD)
+            # Render provides postgres:// URLs; SQLAlchemy needs postgresql://
+            url = self.DATABASE_URL
+            if url.startswith("postgres://"):
+                url = url.replace("postgres://", "postgresql://", 1)
+            return url
+        # Fallback: build from individual components
+        password = self.DB_PASSWORD or ""
+        encoded_password = quote_plus(password)
         return (
             f"postgresql://{self.DB_USER}:{encoded_password}"
             f"@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
@@ -182,7 +184,8 @@ class Settings(BaseSettings):
         protocol = "rediss" if self.REDIS_SSL else "redis"
         
         # URL encode password to handle special characters
-        encoded_password = quote_plus(self.REDIS_PASSWORD)
+        password = self.REDIS_PASSWORD or ""
+        encoded_password = quote_plus(password)
         
         if self.REDIS_USERNAME:
             return f"{protocol}://{self.REDIS_USERNAME}:{encoded_password}@{self.REDIS_HOST}:{self.REDIS_PORT}/{self.REDIS_DB}"
@@ -207,3 +210,15 @@ class Settings(BaseSettings):
 
 # Global settings instance
 settings = Settings()
+
+# Upload folder helper – created lazily to avoid module-level side effects on import
+def get_upload_folder(subdir: str = "business_units") -> str:
+    """Return (and create if needed) the upload folder path."""
+    import os as _os
+    from pathlib import Path as _Path
+    base = _Path(__file__).resolve().parent.parent / "uploads" / subdir
+    base.mkdir(parents=True, exist_ok=True)
+    return str(base)
+
+# Backward-compatible alias (used in some endpoints that import UPLOAD_FOLDER directly)
+UPLOAD_FOLDER = os.path.join("app", "uploads", "business_units")

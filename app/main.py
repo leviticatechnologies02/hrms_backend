@@ -15,6 +15,11 @@ import logging
 from app.core.database import engine
 from app.models import Base
 
+# Absolute base directory of the 'app' package – works regardless of CWD
+# This is critical for Render where the working directory may not be the project root
+_APP_DIR = Path(__file__).resolve().parent
+_PROJECT_ROOT = _APP_DIR.parent
+
 from .core.config import settings
 from .core.database import check_db_connection, close_db_connection
 from .core.redis_client import redis_client
@@ -294,13 +299,17 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     )
 
 
-# Serve static files
-upload_path = Path(settings.UPLOAD_DIR)
+# Serve static files – use absolute paths so they work on Render regardless of CWD
+# /uploads  → <project_root>/uploads  (or app/uploads as fallback)
+upload_path = _PROJECT_ROOT / settings.UPLOAD_DIR
+if not upload_path.exists():
+    # Try relative to the app directory (some deployments structure it this way)
+    upload_path = _APP_DIR / "uploads"
 upload_path.mkdir(parents=True, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=str(upload_path)), name="uploads")
 
-# Serve static files (for favicon, etc.)
-static_path = Path("app/static")
+# /static → <app_dir>/static
+static_path = _APP_DIR / "static"
 static_path.mkdir(parents=True, exist_ok=True)
 app.mount("/static", StaticFiles(directory=str(static_path)), name="static")
 
@@ -338,16 +347,17 @@ async def get_backend_stats():
         db = next(get_db())
         
         # Count models, endpoints, services, repositories (technical metrics)
-        models_path = Path("app/models")
+        # Use absolute paths so these work on Render
+        models_path = _APP_DIR / "models"
         model_files = [f for f in models_path.glob("*.py") if f.name != "__init__.py"] if models_path.exists() else []
         
-        endpoints_path = Path("app/api/v1/endpoints")
+        endpoints_path = _APP_DIR / "api" / "v1" / "endpoints"
         endpoint_files = [f for f in endpoints_path.glob("*.py") if f.name != "__init__.py"] if endpoints_path.exists() else []
         
-        services_path = Path("app/services")
+        services_path = _APP_DIR / "services"
         service_files = [f for f in services_path.glob("*.py") if f.name != "__init__.py"] if services_path.exists() else []
         
-        repos_path = Path("app/repositories")
+        repos_path = _APP_DIR / "repositories"
         repo_files = [f for f in repos_path.glob("*.py") if f.name != "__init__.py"] if repos_path.exists() else []
         
         # GET REAL HRMS DATA FROM DATABASE

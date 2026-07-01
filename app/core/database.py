@@ -14,21 +14,37 @@ from .config import settings
 logger = logging.getLogger(__name__)
 
 
-from sqlalchemy.pool import NullPool
+def _build_connect_args() -> dict:
+    """
+    Build connect_args for psycopg2.
 
-# Create database engine with NullPool
-engine = create_engine(
-    settings.database_url,
-    poolclass=NullPool,
-    connect_args={
+    On Render, DATABASE_URL already points to Render's managed PostgreSQL which
+    requires SSL. When building from individual components we also require SSL.
+    We only add keepalive + SSL args for direct psycopg2 connections; asyncpg
+    (if ever used) has its own SSL handling.
+    """
+    return {
         "keepalives": 1,
         "keepalives_idle": 30,
         "keepalives_interval": 10,
         "keepalives_count": 5,
-        "sslmode": "require"
-    },
+        "sslmode": "require",
+        "connect_timeout": 10,
+    }
+
+
+# Create database engine with QueuePool (prevents connection exhaustion on Render free tier)
+engine = create_engine(
+    settings.database_url,
+    poolclass=QueuePool,
+    pool_size=5,           # Keep 5 persistent connections
+    max_overflow=2,        # Allow up to 2 extra connections under burst
+    pool_timeout=30,       # Wait up to 30s for a free connection
+    pool_recycle=1800,     # Recycle connections every 30 min (avoids stale connections)
+    pool_pre_ping=True,    # Test connection before using from pool (handles Render restarts)
+    connect_args=_build_connect_args(),
     echo=settings.DB_ECHO,
-    future=True
+    future=True,
 )
 
 # Session factory for creating database sessions

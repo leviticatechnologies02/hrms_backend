@@ -1,17 +1,24 @@
 # -*- coding: utf-8 -*-
 """
 Advanced Performance Monitoring System
-Tracks detailed system performance and health metrics
+Tracks detailed system performance and health metrics.
+
+Storage strategy (Render-compatible):
+  1. Primary:  Redis  – survives restarts, shared across workers
+  2. Fallback: In-memory dict – works when Redis is unavailable
+  Local JSON files are NOT used (Render has an ephemeral filesystem).
 """
 
-import os
 import json
 import time
 import threading
+import logging
 from datetime import datetime, timedelta
-from pathlib import Path
 from typing import Dict, Any, List
+
 from .metrics import metrics_collector
+
+logger = logging.getLogger(__name__)
 
 try:
     import psutil
@@ -24,235 +31,251 @@ except Exception:
     PSUTIL_AVAILABLE = False
     psutil = None
 
+
+# ─── Redis helpers ─────────────────────────────────────────────────────────────
+
+def _get_redis():
+    """Lazy import to avoid circular dependency at module load time."""
+    try:
+        from .redis_client import redis_client
+        return redis_client.get_client()
+    except Exception:
+        return None
+
+
+_REDIS_PERF_KEY = "hrms:performance"
+_REDIS_TTL = 60 * 60 * 48  # 48 hours
+
+
+# ─── In-memory fallback ────────────────────────────────────────────────────────
+
+def _default_performance_data() -> Dict[str, Any]:
+    return {
+        "cpu_usage_history": [],
+        "memory_usage_history": [],
+        "response_times": [],
+        "error_rates": [],
+        "peak_usage": {
+            "cpu_peak": 0.0,
+            "memory_peak": 0.0,
+            "slowest_response": 0.0,
+        },
+        "health_score": 100.0,
+        "last_updated": datetime.now().isoformat(),
+    }
+
+
+_in_memory_perf: Dict[str, Any] = _default_performance_data()
+
+
+# ─── Load / save helpers ───────────────────────────────────────────────────────
+
+def _load_performance_data() -> Dict[str, Any]:
+    """Load performance data from Redis, fall back to in-memory."""
+    redis = _get_redis()
+    if redis:
+        try:
+            raw = redis.get(_REDIS_PERF_KEY)
+            if raw:
+                return json.loads(raw)
+        except Exception as e:
+            logger.warning(f"Redis perf read failed, using in-memory: {e}")
+    return dict(_in_memory_perf)
+
+
+def _save_performance_data(data: Dict[str, Any]) -> None:
+    """Persist performance data to Redis; also update in-memory fallback."""
+    global _in_memory_perf
+    _in_memory_perf = dict(data)
+
+    redis = _get_redis()
+    if redis:
+        try:
+            redis.set(_REDIS_PERF_KEY, json.dumps(data), ex=_REDIS_TTL)
+        except Exception as e:
+            logger.warning(f"Redis perf write failed, using in-memory only: {e}")
+
+
+# ─── PerformanceMonitor ────────────────────────────────────────────────────────
+
 class PerformanceMonitor:
-    """Advanced performance monitoring for HRMS system"""
-    
+    """Advanced performance monitoring for HRMS system (Redis-backed, in-memory fallback)."""
+
     def __init__(self):
-        self.performance_file = Path("app/data/performance.json")
-        self.performance_file.parent.mkdir(exist_ok=True)
         self.monitoring_active = False
         self.monitor_thread = None
-        
-        # Initialize performance data
-        if not self.performance_file.exists():
-            self._initialize_performance_data()
-    
-    def _initialize_performance_data(self):
-        """Initialize performance monitoring data"""
-        initial_data = {
-            "cpu_usage_history": [],
-            "memory_usage_history": [],
-            "response_times": [],
-            "error_rates": [],
-            "peak_usage": {
-                "cpu_peak": 0.0,
-                "memory_peak": 0.0,
-                "slowest_response": 0.0
-            },
-            "health_score": 100.0,
-            "last_updated": datetime.now().isoformat()
-        }
-        self._save_performance_data(initial_data)
-    
-    def _load_performance_data(self) -> Dict[str, Any]:
-        """Load performance data from file"""
-        try:
-            with open(self.performance_file, 'r') as f:
-                return json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
-            self._initialize_performance_data()
-            return self._load_performance_data()
-    
-    def _save_performance_data(self, data: Dict[str, Any]):
-        """Save performance data to file"""
-        try:
-            with open(self.performance_file, 'w') as f:
-                json.dump(data, f, indent=2)
-        except Exception as e:
-            print(f"Error saving performance data: {e}")
-    
+
+        # Ensure initial data exists
+        existing = _load_performance_data()
+        if not existing.get("peak_usage"):
+            _save_performance_data(_default_performance_data())
+
+    # ── Lifecycle ──────────────────────────────────────────────────────────────
+
     def start_monitoring(self):
-        """Start background performance monitoring"""
+        """Start background performance monitoring."""
         if not self.monitoring_active and PSUTIL_AVAILABLE:
             self.monitoring_active = True
-            self.monitor_thread = threading.Thread(target=self._monitor_loop, daemon=True)
+            self.monitor_thread = threading.Thread(
+                target=self._monitor_loop, daemon=True, name="perf-monitor"
+            )
             self.monitor_thread.start()
-            print("[OK] Performance monitoring started")
-    
+            logger.info("[OK] Performance monitoring started")
+        elif not PSUTIL_AVAILABLE:
+            logger.info("[INFO] psutil unavailable – performance monitoring skipped")
+
     def stop_monitoring(self):
-        """Stop background performance monitoring"""
+        """Stop background performance monitoring."""
         self.monitoring_active = False
         if self.monitor_thread:
-            self.monitor_thread.join(timeout=1)
-        print("[STOP] Performance monitoring stopped")
-    
+            self.monitor_thread.join(timeout=2)
+        logger.info("[STOP] Performance monitoring stopped")
+
     def _monitor_loop(self):
-        """Background monitoring loop"""
+        """Background monitoring loop."""
         while self.monitoring_active:
             try:
                 self._collect_system_metrics()
                 time.sleep(30)  # Collect metrics every 30 seconds
             except Exception as e:
-                print(f"Performance monitoring error: {e}")
+                logger.debug(f"Performance monitoring error: {e}")
                 time.sleep(60)  # Wait longer on error
-    
+
     def _collect_system_metrics(self):
-        """Collect current system performance metrics"""
+        """Collect current system performance metrics."""
         if not PSUTIL_AVAILABLE:
             return
-        
+
         try:
-            data = self._load_performance_data()
+            data = _load_performance_data()
             current_time = datetime.now().isoformat()
-            
-            # Get CPU usage
+
             cpu_percent = psutil.cpu_percent(interval=1)
-            
-            # Get memory usage
             memory = psutil.virtual_memory()
             memory_percent = memory.percent
-            
+
             # Update history (keep last 100 readings)
-            data["cpu_usage_history"].append({
-                "timestamp": current_time,
-                "value": cpu_percent
-            })
-            data["memory_usage_history"].append({
-                "timestamp": current_time,
-                "value": memory_percent
-            })
-            
-            # Keep only last 100 entries
+            data["cpu_usage_history"].append({"timestamp": current_time, "value": cpu_percent})
+            data["memory_usage_history"].append({"timestamp": current_time, "value": memory_percent})
+
             data["cpu_usage_history"] = data["cpu_usage_history"][-100:]
             data["memory_usage_history"] = data["memory_usage_history"][-100:]
-            
+
             # Update peak values
             data["peak_usage"]["cpu_peak"] = max(data["peak_usage"]["cpu_peak"], cpu_percent)
             data["peak_usage"]["memory_peak"] = max(data["peak_usage"]["memory_peak"], memory_percent)
-            
-            # Calculate health score
+
             data["health_score"] = self._calculate_health_score(data)
             data["last_updated"] = current_time
-            
-            self._save_performance_data(data)
-            
+
+            _save_performance_data(data)
         except Exception as e:
-            print(f"Error collecting system metrics: {e}")
-    
+            logger.debug(f"Error collecting system metrics: {e}")
+
+    # ── Write helpers ──────────────────────────────────────────────────────────
+
     def log_response_time(self, response_time_ms: float):
-        """Log API response time"""
+        """Log API response time."""
         try:
-            data = self._load_performance_data()
+            data = _load_performance_data()
             current_time = datetime.now().isoformat()
-            
-            # Add response time
-            data["response_times"].append({
-                "timestamp": current_time,
-                "value": response_time_ms
-            })
-            
+
+            data["response_times"].append({"timestamp": current_time, "value": response_time_ms})
+
             # Keep only last 1000 response times
             data["response_times"] = data["response_times"][-1000:]
-            
-            # Update slowest response
+
             data["peak_usage"]["slowest_response"] = max(
-                data["peak_usage"]["slowest_response"], 
-                response_time_ms
+                data["peak_usage"]["slowest_response"], response_time_ms
             )
-            
-            self._save_performance_data(data)
-            
+
+            _save_performance_data(data)
         except Exception as e:
-            print(f"Error logging response time: {e}")
-    
+            logger.debug(f"Error logging response time: {e}")
+
     def log_error(self, error_type: str = "general"):
-        """Log system error for error rate calculation"""
+        """Log system error for error rate calculation."""
         try:
-            data = self._load_performance_data()
+            data = _load_performance_data()
             current_time = datetime.now().isoformat()
-            
-            # Add error
-            data["error_rates"].append({
-                "timestamp": current_time,
-                "type": error_type
-            })
-            
-            # Keep only last 500 errors
+
+            data["error_rates"].append({"timestamp": current_time, "type": error_type})
             data["error_rates"] = data["error_rates"][-500:]
-            
-            self._save_performance_data(data)
-            
+
+            _save_performance_data(data)
         except Exception as e:
-            print(f"Error logging error: {e}")
-    
+            logger.debug(f"Error logging error: {e}")
+
+    # ── Read helpers ───────────────────────────────────────────────────────────
+
     def _calculate_health_score(self, data: Dict[str, Any]) -> float:
-        """Calculate overall system health score"""
+        """Calculate overall system health score."""
         try:
             base_score = 100.0
-            
+
             # CPU usage penalty (recent average)
             cpu_history = data.get("cpu_usage_history", [])
             if cpu_history:
-                recent_cpu = [entry["value"] for entry in cpu_history[-10:]]  # Last 10 readings
+                recent_cpu = [e["value"] for e in cpu_history[-10:]]
                 avg_cpu = sum(recent_cpu) / len(recent_cpu)
                 if avg_cpu > 80:
-                    base_score -= (avg_cpu - 80) * 0.5  # Penalty for high CPU
-            
+                    base_score -= (avg_cpu - 80) * 0.5
+
             # Memory usage penalty
             memory_history = data.get("memory_usage_history", [])
             if memory_history:
-                recent_memory = [entry["value"] for entry in memory_history[-10:]]
+                recent_memory = [e["value"] for e in memory_history[-10:]]
                 avg_memory = sum(recent_memory) / len(recent_memory)
                 if avg_memory > 85:
-                    base_score -= (avg_memory - 85) * 0.3  # Penalty for high memory
-            
+                    base_score -= (avg_memory - 85) * 0.3
+
             # Response time penalty
             response_times = data.get("response_times", [])
             if response_times:
-                recent_responses = [entry["value"] for entry in response_times[-50:]]  # Last 50 responses
+                recent_responses = [e["value"] for e in response_times[-50:]]
                 avg_response = sum(recent_responses) / len(recent_responses)
-                if avg_response > 1000:  # Over 1 second
-                    base_score -= min(20, (avg_response - 1000) / 100)  # Penalty for slow responses
-            
+                if avg_response > 1000:
+                    base_score -= min(20, (avg_response - 1000) / 100)
+
             # Error rate penalty
             error_rates = data.get("error_rates", [])
-            recent_errors = [e for e in error_rates if 
-                           datetime.fromisoformat(e["timestamp"]) > datetime.now() - timedelta(hours=1)]
-            if len(recent_errors) > 10:  # More than 10 errors in last hour
+            recent_errors = [
+                e for e in error_rates
+                if datetime.fromisoformat(e["timestamp"]) > datetime.now() - timedelta(hours=1)
+            ]
+            if len(recent_errors) > 10:
                 base_score -= min(30, len(recent_errors) - 10)
-            
+
             return max(0.0, min(100.0, base_score))
-            
         except Exception as e:
-            print(f"Error calculating health score: {e}")
-            return 85.0  # Default decent score
-    
+            logger.debug(f"Error calculating health score: {e}")
+            return 85.0
+
     def get_performance_summary(self) -> Dict[str, Any]:
-        """Get comprehensive performance summary"""
+        """Get comprehensive performance summary."""
         try:
-            data = self._load_performance_data()
-            
-            # Calculate averages
+            data = _load_performance_data()
+
             cpu_history = data.get("cpu_usage_history", [])
             memory_history = data.get("memory_usage_history", [])
             response_times = data.get("response_times", [])
-            
+
             avg_cpu = 0.0
             avg_memory = 0.0
             avg_response = 0.0
-            
+
             if cpu_history:
-                recent_cpu = [entry["value"] for entry in cpu_history[-20:]]
+                recent_cpu = [e["value"] for e in cpu_history[-20:]]
                 avg_cpu = sum(recent_cpu) / len(recent_cpu)
-            
+
             if memory_history:
-                recent_memory = [entry["value"] for entry in memory_history[-20:]]
+                recent_memory = [e["value"] for e in memory_history[-20:]]
                 avg_memory = sum(recent_memory) / len(recent_memory)
-            
+
             if response_times:
-                recent_responses = [entry["value"] for entry in response_times[-100:]]
+                recent_responses = [e["value"] for e in response_times[-100:]]
                 avg_response = sum(recent_responses) / len(recent_responses)
-            
+
             return {
                 "health_score": data.get("health_score", 100.0),
                 "avg_cpu_usage": round(avg_cpu, 1),
@@ -261,13 +284,14 @@ class PerformanceMonitor:
                 "peak_cpu": data.get("peak_usage", {}).get("cpu_peak", 0.0),
                 "peak_memory": data.get("peak_usage", {}).get("memory_peak", 0.0),
                 "slowest_response": data.get("peak_usage", {}).get("slowest_response", 0.0),
-                "total_errors_today": len([e for e in data.get("error_rates", []) if 
-                                         datetime.fromisoformat(e["timestamp"]).date() == datetime.now().date()]),
-                "monitoring_active": self.monitoring_active
+                "total_errors_today": len([
+                    e for e in data.get("error_rates", [])
+                    if datetime.fromisoformat(e["timestamp"]).date() == datetime.now().date()
+                ]),
+                "monitoring_active": self.monitoring_active,
             }
-            
         except Exception as e:
-            print(f"Error getting performance summary: {e}")
+            logger.debug(f"Error getting performance summary: {e}")
             return {
                 "health_score": 85.0,
                 "avg_cpu_usage": 0.0,
@@ -277,8 +301,9 @@ class PerformanceMonitor:
                 "peak_memory": 0.0,
                 "slowest_response": 0.0,
                 "total_errors_today": 0,
-                "monitoring_active": False
+                "monitoring_active": False,
             }
+
 
 # Global performance monitor instance
 performance_monitor = PerformanceMonitor()

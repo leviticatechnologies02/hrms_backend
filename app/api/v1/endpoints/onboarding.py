@@ -2601,7 +2601,7 @@ async def generate_letter_from_template(
         generated_content = template.template_content
         for k, v in field_values.items():
             generated_content = generated_content.replace(f"{{{k}}}", v)
-        db.add(OfferLetter(
+        offer_letter = OfferLetter(
             form_id=None,
             template_id=template.id,
             letter_content=generated_content,
@@ -2616,9 +2616,12 @@ async def generate_letter_from_template(
             basic_salary=field_values.get("basic_salary"),
             gross_salary=field_values.get("gross_salary"),
             ctc=field_values.get("ctc"),
-        ))
+        )
+        db.add(offer_letter)
         db.commit()
-        return TemplateGenerationResponse(success=True, message="Letter generated successfully", offer_letter_id=None, generated_content=generated_content, template_name=generation_data.template_name, field_values=field_values)
+        db.refresh(offer_letter)
+        return TemplateGenerationResponse(success=True, message="Letter generated successfully", offer_letter_id=offer_letter.id, generated_content=generated_content, template_name=generation_data.template_name, field_values=field_values)
+
     except HTTPException:
         raise
     except Exception as e:

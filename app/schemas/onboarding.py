@@ -116,7 +116,7 @@ class CreateOnboardingSchema(BaseModel):
 
 
 class UpdateOnboardingSchema(CreateOnboardingSchema):
-    status: Optional[str] = None
+    status: Optional[OnboardingStatusEnum] = None
     expires_at: Optional[datetime] = None
 
 
@@ -156,7 +156,7 @@ class OnboardingResponseSchema(CreateOnboardingSchema):
                 "id": 0,
                 "business_id": 0,
                 "form_token": "string",
-                "status": "string",
+                "status": "draft",
                 "created_at": "2026-05-19T17:08:09.875Z",
                 "sent_at": "2026-05-19T17:08:09.875Z",
                 "submitted_at": "2026-05-19T17:08:09.875Z",
@@ -192,7 +192,7 @@ class OnboardingFormUpdate(BaseModel):
     policies: Optional[List[int]] = None
     offer_letter: Optional[OfferLetterSchema] = None
     salary_options: Optional[SalaryOptionsSchema] = None
-    status: Optional[str] = None
+    status: Optional[OnboardingStatusEnum] = None
     verify_mobile: Optional[bool] = None
     verify_pan: Optional[bool] = None
     verify_bank: Optional[bool] = None

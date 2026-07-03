@@ -301,17 +301,18 @@ from .otp_verification import OTPVerification
 from .credits import UserCredits, CreditTransaction, CreditPricing
 from .requests import (
     RequestStatus, RequestType, Request, LeaveRequest,
-    MissedPunchRequest, ClaimRequest, CompOffRequest,
+    MissedPunchRequest, ClaimRequest, CompoffRequest,
     TimeRelaxationRequest, VisitPunchRequest, StrikeExemptionRequest,
-    ShiftRosterRequest, WeekOffRosterRequest
+    ShiftRosterRequest, WeekoffRosterRequest, WorkflowRequest, HelpdeskRequest
 )
 
 __all__.append("OTPVerification")
 __all__.extend([
     "UserCredits", "CreditTransaction", "CreditPricing",
     "RequestStatus", "RequestType", "Request", "LeaveRequest",
-    "MissedPunchRequest", "ClaimRequest", "CompOffRequest",
+    "MissedPunchRequest", "ClaimRequest", "CompoffRequest",
     "TimeRelaxationRequest", "VisitPunchRequest", "StrikeExemptionRequest",
-    "ShiftRosterRequest", "WeekOffRosterRequest"
+    "ShiftRosterRequest", "WeekoffRosterRequest", "WorkflowRequest", "HelpdeskRequest"
 ])
+
 

@@ -16,8 +16,8 @@ class LoginRequest(BaseModel):
         "json_schema_extra": {
             "examples": [
                 {
-                    "email": "chandupatel.1434@gmail.com",
-                    "password": "Chandu@1434"
+                    "email": "kanuri.vyshnavi123@gmail.com",
+                    "password": "Vyshu@18"
                 }
             ]
         }

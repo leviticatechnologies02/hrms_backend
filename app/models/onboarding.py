@@ -207,7 +207,7 @@ class OfferLetter(Base):
     business_id = Column(Integer, ForeignKey("businesses.id"), nullable=False, index=True)
     
     # Offer details
-    position_title = Column(String(255), nullable=False)
+    position_title = Column(String(255), nullable=True)
     department = Column(String(255))
     location = Column(String(255))
     

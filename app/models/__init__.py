@@ -298,4 +298,20 @@ from .todo import TodoTask
 from .calendar import CalendarEvent, CalendarEventAttendee, CalendarView
 from .otp_verification import OTPVerification
 
+from .credits import UserCredits, CreditTransaction, CreditPricing
+from .requests import (
+    RequestStatus, RequestType, Request, LeaveRequest,
+    MissedPunchRequest, ClaimRequest, CompOffRequest,
+    TimeRelaxationRequest, VisitPunchRequest, StrikeExemptionRequest,
+    ShiftRosterRequest, WeekOffRosterRequest
+)
+
 __all__.append("OTPVerification")
+__all__.extend([
+    "UserCredits", "CreditTransaction", "CreditPricing",
+    "RequestStatus", "RequestType", "Request", "LeaveRequest",
+    "MissedPunchRequest", "ClaimRequest", "CompOffRequest",
+    "TimeRelaxationRequest", "VisitPunchRequest", "StrikeExemptionRequest",
+    "ShiftRosterRequest", "WeekOffRosterRequest"
+])
+

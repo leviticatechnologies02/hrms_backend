@@ -298,16 +298,24 @@ class AttendanceService:
             punch_in_time = None
             punch_out_time = None
             
+            def parse_time_str(time_str: str) -> datetime.time:
+                for fmt in ("%H:%M:%S", "%H:%M", "%I:%M %p", "%I:%M:%S %p"):
+                    try:
+                        return datetime.strptime(time_str, fmt).time()
+                    except ValueError:
+                        continue
+                raise ValueError(f"Invalid time format: {time_str}")
+
             if manual_data.check_in_time:
                 punch_in_time = datetime.combine(
                     manual_data.attendance_date,
-                    datetime.strptime(manual_data.check_in_time, "%H:%M").time()
+                    parse_time_str(manual_data.check_in_time)
                 )
             
             if manual_data.check_out_time:
                 punch_out_time = datetime.combine(
                     manual_data.attendance_date,
-                    datetime.strptime(manual_data.check_out_time, "%H:%M").time()
+                    parse_time_str(manual_data.check_out_time)
                 )
             
             # Calculate total hours

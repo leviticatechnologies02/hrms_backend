@@ -164,7 +164,8 @@ class DeductionService:
                 "effective_date": effective_date.isoformat(),
                 "updated_at": datetime.now().isoformat()
             }
-            
+        except ValueError as e:
+            raise
         except Exception as e:
             raise Exception(f"Failed to update deduction: {str(e)}")
     

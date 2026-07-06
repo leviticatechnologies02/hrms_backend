@@ -188,6 +188,8 @@ class TDSChallanService:
             else:
                 raise ValueError(f"No challan found for {month} in {financial_year}")
             
+        except ValueError as e:
+            raise
         except Exception as e:
             raise Exception(f"Failed to delete challan for month {month}: {str(e)}")
     

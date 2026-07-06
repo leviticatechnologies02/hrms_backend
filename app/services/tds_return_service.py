@@ -130,6 +130,8 @@ class TDSReturnService:
                 "return_id": result["return_id"]
             }
             
+        except ValueError as e:
+            raise
         except Exception as e:
             raise Exception(f"Failed to save return for quarter {quarter}: {str(e)}")
     
@@ -190,6 +192,8 @@ class TDSReturnService:
             else:
                 raise ValueError(f"No TDS return found for {quarter} in {financial_year}")
             
+        except ValueError as e:
+            raise
         except Exception as e:
             raise Exception(f"Failed to delete return for quarter {quarter}: {str(e)}")
     

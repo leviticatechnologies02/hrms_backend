@@ -398,6 +398,9 @@ class DeductionRepository:
                 "effective_date": effective_date
             }
             
+        except ValueError as e:
+            self.db.rollback()
+            raise
         except Exception as e:
             self.db.rollback()
             raise Exception(f"Database error in update_employee_deduction: {str(e)}")

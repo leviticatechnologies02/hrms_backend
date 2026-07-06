@@ -128,6 +128,8 @@ class TDSChallanService:
                 "challan_id": result["challan_id"]
             }
             
+        except ValueError as e:
+            raise
         except Exception as e:
             raise Exception(f"Failed to save challan for month {month}: {str(e)}")
     

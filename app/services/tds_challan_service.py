@@ -255,6 +255,8 @@ class TDSChallanService:
                 "completed_months_list": list(completed_months_set)
             }
             
+        except ValueError as e:
+            raise
         except Exception as e:
             raise Exception(f"Failed to get challan summary: {str(e)}")
     
@@ -290,4 +292,4 @@ class TDSChallanService:
             return months
             
         except Exception as e:
-            raise Exception(f"Invalid financial year format: {financial_year}")
+            raise ValueError(f"Invalid financial year format: {financial_year}")

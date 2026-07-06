@@ -1818,7 +1818,6 @@ async def copy_deductions_from_previous_period(
             target_period=copy_data.target_period,
             deduction_type=copy_data.deduction_type,
             overwrite_existing=copy_data.overwrite_existing,
-            current_user=current_user,
             created_by=current_user.id,
             business_id=business_id
         )

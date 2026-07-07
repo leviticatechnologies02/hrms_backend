@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Response
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from pydantic import BaseModel, EmailStr
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from app.core.database import get_db
 from app.core.security import create_access_token, verify_password, get_password_hash
@@ -227,15 +227,15 @@ async def get_login_sessions(current_user: User = Depends(get_current_user)):
         LoginSession(
             session_id="session_1",
             login_time=datetime.utcnow().replace(hour=8, minute=15, second=30),
-            last_seen=datetime.utcnow().replace(minute=datetime.utcnow().minute - 3),
+            last_seen=datetime.utcnow() - timedelta(minutes=3),
             ip_address="192.168.1.10",
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             is_current=True
         ),
         LoginSession(
             session_id="session_2",
-            login_time=datetime.utcnow().replace(hour=7, minute=45, second=12),
-            last_seen=datetime.utcnow().replace(minute=datetime.utcnow().minute - 30),
+            login_time=datetime.utcnow() - timedelta(hours=1),
+            last_seen=datetime.utcnow() - timedelta(minutes=30),
             ip_address="192.168.1.9",
             user_agent="Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X)",
             is_current=False

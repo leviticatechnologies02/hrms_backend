@@ -4777,11 +4777,11 @@ async def get_employee_identity(
         
         # Prefer an explicit, business-scoped EmployeeProfile lookup to avoid
         # cross-business or missing-profile issues during setup.
+        # Note: EmployeeProfile has no business_id — it is scoped via the employee FK.
         from app.models.employee import EmployeeProfile
 
         profile = db.query(EmployeeProfile).filter(
-            EmployeeProfile.employee_id == employee_id,
-            EmployeeProfile.business_id == business_id
+            EmployeeProfile.employee_id == employee_id
         ).first()
 
         if not profile:
@@ -4795,12 +4795,12 @@ async def get_employee_identity(
             "business_id": employee.business_id,
             "bank_name": profile.bank_name or "",
             "bank_account_number": profile.bank_account_number or "",
-            "ifsc_code": profile.ifsc_code or "",
+            "ifsc_code": profile.bank_ifsc_code or "",
             "pan_number": profile.pan_number or "",
             "aadhaar_number": profile.aadhaar_number or "",
-            "passport_number": profile.passport_number or "",
-            "driving_license": profile.driving_license or "",
-            "voter_id": profile.voter_id or ""
+            "passport_number": employee.passport_number or "",
+            "driving_license": employee.driving_license or "",
+            "voter_id": getattr(employee, "voter_id", "") or ""
         }
     
     except HTTPException:

@@ -149,7 +149,7 @@ class Employee(Base):
     profile = relationship("EmployeeProfile", back_populates="employee", uselist=False)
     documents = relationship("EmployeeDocument", back_populates="employee")
     salary_records = relationship("EmployeeSalary", back_populates="employee")
-    relatives = relationship("EmployeeRelative", back_populates="employee")
+    relatives = relationship("EmployeeRelative", back_populates="employee", passive_deletes=True)
     additional_info = relationship("EmployeeAdditionalInfo", back_populates="employee", uselist=False)
     permissions = relationship("EmployeePermissions", back_populates="employee", uselist=False)
     access_settings = relationship("EmployeeAccess", back_populates="employee", uselist=False)

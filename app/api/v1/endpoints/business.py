@@ -9,7 +9,7 @@ from typing import List, Optional
 import logging
 
 from app.core.database import get_db
-from app.api.v1.deps import get_current_admin, get_current_superadmin
+from app.api.v1.deps import get_current_admin
 from app.models.user import User
 from app.schemas.business import (
     BusinessCreate,
@@ -359,24 +359,24 @@ def delete_business(
 @router.get(
     "/admin/all",
     response_model=List[BusinessSummary],
-    summary="[Superadmin] List all businesses"
+    summary="[Admin] List all businesses"
 )
 def list_all_businesses(
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=500),
     active_only: bool = Query(False),
     db: Session = Depends(get_db),
-    superadmin: User = Depends(get_current_superadmin),
+    current_user: User = Depends(get_current_admin),
 ):
     """
-    Get all businesses in the system (superadmin only).
+    Get all businesses in the system (admin or superadmin).
     
     **Features:**
     - See businesses from all users
     - Pagination
     - Filter by status
     
-    **Access:** SUPERADMIN only
+    **Access:** ADMIN or SUPERADMIN
     """
     
     repo = BusinessRepository(db)
@@ -387,7 +387,7 @@ def list_all_businesses(
     )
     
     logger.info(
-        f"Superadmin {superadmin.email} listed {len(businesses)} businesses"
+        f"{current_user.email} listed {len(businesses)} businesses"
     )
     
     return businesses
@@ -396,17 +396,17 @@ def list_all_businesses(
 @router.get(
     "/admin/state/{state}",
     response_model=List[BusinessSummary],
-    summary="[Superadmin] Businesses by state"
+    summary="[Admin] Businesses by state"
 )
 def get_businesses_by_state(
     state: str,
     db: Session = Depends(get_db),
-    superadmin: User = Depends(get_current_superadmin),
+    current_user: User = Depends(get_current_admin),
 ):
     """
     Get all businesses in a specific state.
     
-    **Access:** SUPERADMIN only
+    **Access:** ADMIN or SUPERADMIN
     """
     
     repo = BusinessRepository(db)
@@ -418,17 +418,17 @@ def get_businesses_by_state(
 @router.get(
     "/admin/plan/{plan}",
     response_model=List[BusinessSummary],
-    summary="[Superadmin] Businesses by plan"
+    summary="[Admin] Businesses by plan"
 )
 def get_businesses_by_plan(
     plan: str,
     db: Session = Depends(get_db),
-    superadmin: User = Depends(get_current_superadmin),
+    current_user: User = Depends(get_current_admin),
 ):
     """
     Get all businesses on a specific subscription plan.
     
-    **Access:** SUPERADMIN only
+    **Access:** ADMIN or SUPERADMIN
     """
     
     repo = BusinessRepository(db)
@@ -439,11 +439,11 @@ def get_businesses_by_plan(
 
 @router.get(
     "/admin/stats",
-    summary="[Superadmin] Business statistics"
+    summary="[Admin] Business statistics"
 )
 def get_business_statistics(
     db: Session = Depends(get_db),
-    superadmin: User = Depends(get_current_superadmin),
+    current_user: User = Depends(get_current_admin),
 ):
     """
     Get overall business statistics.
@@ -454,7 +454,7 @@ def get_business_statistics(
     - Breakdown by plan
     - Breakdown by state
     
-    **Access:** SUPERADMIN only
+    **Access:** ADMIN or SUPERADMIN
     """
     
     from sqlalchemy import func
